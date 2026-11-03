@@ -1,0 +1,1046 @@
+# TruthLayer BD: Competition-Grade Mobile-First PWA, End-to-End Project & API Integration Guide
+
+> **Project goal:** Bangla news screenshot/photo-card/social post থেকে **Media + Claim + Context + Source**—এই চার layer verify করে explainable evidence report দেখানো।
+>
+> **Core rule:** **Gemini কখনো নিজের memory থেকে “সত্য/মিথ্যা” decide করবে না।** Tavily/Search থেকে পাওয়া evidence-ই verification-এর input; Gemini শুধু extraction ও evidence comparison-এ সাহায্য করবে। Final status Python evidence-fusion rules calculate করবে।
+
+---
+
+## Module 1. Project overview
+
+TruthLayer BD একটি Bangladesh-focused, evidence-assisted misinformation verification system এবং mobile-first Progressive Web App (PWA)। এটি chatbot, simple fake-news classifier বা শুধু deepfake detector নয়। User Facebook post, news card বা screenshot upload/capture করলে system:
+
+1. image validate ও store করে;
+2. EasyOCR দিয়ে Bangla/English text পড়ে;
+3. Gemini দিয়ে text থেকে main claim, claimed source, person, organization, place এবং date/time extract করে;
+4. extracted তথ্য থেকে search queries বানায়;
+5. Tavily দিয়ে relevant official, credible news এবং fact-check evidence retrieve করে;
+6. possible original incident, date, location এবং image context-এর সঙ্গে current claim compare করে;
+7. Gemini-কে **শুধু retrieved evidence** দিয়ে প্রতিটি source claim-কে support, contradict, unrelated বা insufficient হিসেবে classify করতে বলে;
+8. media, claim, context ও source evidence Python rules দিয়ে fuse করে final status ও confidence তৈরি করে;
+9. SQLite-এ analysis history রাখে;
+10. React dashboard-এ verdict-এর বদলে evidence-backed report ও evidence graph দেখায়।
+
+Core idea: **একটি post একই সঙ্গে real image, false claim, old event এবং trusted news logo ব্যবহার করতে পারে। TruthLayer BD সব layer একসঙ্গে পরীক্ষা করে।**
+
+### Build decisions (2026-11-02)
+
+- **Provider models:** default `gemini-3.8-flash`, fallback `gemini-3.5-flash-lite`. Google-এর model listing/pricing-এ দুটো ID আছে; তবে project-specific access startup-এ একটি minimal structured-output call দিয়ে check করতে হবে। Access না থাকলে configured fallback, তারপর manual extraction ব্যবহার হবে। Free-tier availability কখনো assumed হবে না।
+- **Two separate state fields:** `status` হলো pipeline state: `queued | processing | awaiting_confirmation | completed | partial | failed`। `verification.label` হলো evidence conclusion: `supported | contradicted | conflicting | unverified | insufficient_evidence`; credible direct official proof থাকলে `verified`। `misleading`, `context_mismatch`, `source_impersonation_suspected` MVP-তে secondary `flags`, primary label নয়। Processing/partial কখনো evidence label হবে না।
+- **MVP scope:** upload, editable OCR, claim extraction, Tavily retrieval, deduplicated cited evidence, bounded comparison, conservative Python fusion, report/history/delete এবং mobile UI। Media ও image-origin context-এর status `inconclusive` থাকবে যতক্ষণ independent image-match/provenance evidence না আসে। Dataset matching, evidence graph এবং offline cached reports next phase। PWA installable shell MVP-তে রাখা যায়, কিন্তু offline verification নয়।
+- **Evidence gate:** সব non-inconclusive conclusion-এ valid `evidence_id` এবং URL লাগবে। Missing official-site search result একা contradiction বা impersonation proof নয়। `confidence` নামে probability দেখানো হবে না; MVP-তে `evidence_coverage: low | medium | high` দেখানো হবে।
+
+এটি “magic fake-news detector” নয়। এটি একটি transparent decision-support tool: user evidence links, reasoning summary এবং uncertainty দেখতে পাবে।
+
+### Four verification layers
+
+| Layer | System কী পরীক্ষা করে | Example output |
+|---|---|---|
+| **Media** | image reuse/known-card match, visible manipulation clues, available provenance | No strong synthetic-media evidence detected |
+| **Claim** | current statement credible evidence-এ supported/contradicted কি না | No independent confirmation found |
+| **Context** | image/event-এর original date/location current caption-এর সঙ্গে মেলে কি না | Image appears linked to a July 2024 protest |
+| **Source** | claimed outlet/authority matching publication করেছে কি না; logo impersonation clues | No matching official publication found |
+
+Media analysis-কে overclaim করা যাবে না। Dedicated calibrated detector ছাড়া “AI-generated” নিশ্চিত বলা যাবে না; safer output হবে “no strong evidence detected” বা “media origin could not be established।”
+
+---
+
+## Module 2. Recommended all-free stack
+
+| Layer | Technology | কাজ | API key লাগে? |
+|---|---|---|---|
+| Frontend | React + Vite + TypeScript + Tailwind CSS | Mobile-first upload, progress, report, history | না |
+| Routing/API/UI | React Router, Axios, Lucide React, Recharts | Navigation, backend client, icons, charts | না |
+| Optional UI | motion-text-kit, Uilora components/templates | Selective polish; only where useful | না |
+| PWA | `vite-plugin-pwa` + service worker | Installable app shell, offline cached reports | না |
+| Backend | Python + FastAPI | Pipeline orchestration, validation, scoring | না |
+| ORM/Database | SQLAlchemy or SQLModel + SQLite | Analyses, evidence, API usage/history | না |
+| OCR | EasyOCR | Screenshot থেকে Bangla/English text | না; local model |
+| AI extraction/comparison | Gemini Developer API: `gemini-3.8-flash` primary, `gemini-3.5-flash-lite` fallback | Structured extraction ও bounded evidence comparison | হ্যাঁ |
+| Web retrieval | Tavily free tier | Current web evidence search | হ্যাঁ |
+| Open datasets | BD-FakeDetect, FakePhotoCard-BD, BanglaFakeCard, FactCheckBD data | Offline matching, evaluation, demo enrichment | সাধারণত না; dataset license/terms check করতে হবে |
+
+Free-tier quota, supported model এবং account eligibility সময়ের সঙ্গে বদলাতে পারে। তাই provider/model names environment variables-এ রাখতে হবে এবং graceful fallback implement করতে হবে।
+
+### Gemini model selection
+
+TruthLayer BD-এর primary model:
+
+```text
+gemini-3.8-flash
+```
+
+এটি দুইটি bounded backend call-এ ব্যবহার হবে:
+
+1. OCR text clean/structure করে claim, claimed source, entities, date, location এবং search queries extract করা;
+2. Tavily/local dataset থেকে retrieved evidence claim-কে support, contradict বা address করে না—তা structured JSON-এ classify করা এবং evidence-based explanation তৈরি করা।
+
+Primary model unavailable, restricted বা quota-exhausted হলে fallback:
+
+```text
+gemini-3.5-flash-lite
+```
+
+Fallback model-ও একই strict JSON schema ও “use only supplied evidence” rules অনুসরণ করবে। কোনো Gemini model Tavily-এর বিকল্প হিসেবে web evidence invent করবে না এবং final truth verdict দেবে না। Model availability/free-tier eligibility বদলাতে পারে, তাই deploy করার আগে Google AI Studio/API model listing দিয়ে configured model accessible কি না check করতে হবে। দুটো model-ই unavailable হলে manual claim confirmation ও rule-based comparison fallback চলবে।
+
+---
+
+## Module 3. High-level architecture
+
+```text
+React + Vite + Tailwind
+        |
+        | POST /api/v1/analyses (multipart image)
+        v
+FastAPI orchestration layer
+        |
+        +--> Image validation + safe local storage
+        |
+        +--> EasyOCR (local)
+        |       \--> raw_text + OCR confidence
+        |
+        +--> Gemini extraction API (optional)
+        |       \--> claim + source + entities + search queries
+        |
+        +--> Local dataset index
+        |       \--> similar known claims/cards
+        |
+        +--> Tavily Search API (optional but preferred)
+        |       \--> official publication, corroboration, fact-check,
+        |            possible original incident/context
+        |
+        +--> Gemini comparison API (optional)
+        |       \--> per-evidence stance based only on supplied text
+        |
+        +--> Python layer checks + evidence-fusion engine
+        |       \--> Media + Claim + Context + Source cards
+        |            + final status + reasons + limitations
+        |
+        +--> SQLite
+        |       \--> analysis, evidence, history, provider usage
+        v
+React verification dashboard
+```
+
+---
+
+## Module 4. End-to-end processing flow
+
+### Step 1 — Screenshot upload
+
+Frontend `multipart/form-data` হিসেবে image পাঠাবে। Backend:
+
+- MIME type এবং actual file signature validate করবে;
+- only JPEG/PNG/WebP accept করবে;
+- configurable size limit (যেমন 8 MB) enforce করবে;
+- random UUID filename ব্যবহার করবে;
+- original filename path হিসেবে ব্যবহার করবে না;
+- image dimensions ও corruption check করবে;
+- optional EXIF metadata remove করবে।
+
+Mobile input-এর primary label হবে **Upload Suspicious Post** এবং support করবে:
+
+- **Choose from Gallery** — user-selected file only; full gallery permission নয়;
+- **Take Photo** — native camera flow, where supported;
+- **Paste Screenshot** — Clipboard API/browser support থাকলে;
+- optional **Add caption or context** text field।
+
+Camera input example:
+
+```html
+<input type="file" accept="image/*" capture="environment" />
+```
+
+Gallery ও camera action-এর জন্য প্রয়োজনে separate file inputs/buttons ব্যবহার করতে হবে। Desktop-এ drag-and-drop, file picker এবং clipboard paste থাকবে। Selection-এর পর fast preview, replace/remove এবং **Start Verification** action দেখাবে।
+
+Backend সঙ্গে সঙ্গে `analysis_id` এবং `status: queued` দিতে পারে। MVP-তে request-এর মধ্যেই process করা সম্ভব; production-like demo-তে polling workflow ভালো।
+
+### Step 2 — EasyOCR (local, no paid API)
+
+EasyOCR Bangla ও English text extract করবে:
+
+```python
+reader = easyocr.Reader(["bn", "en"])
+items = reader.readtext(image_path)
+```
+
+Output normalize করতে হবে:
+
+- detected lines reading order-এ join;
+- repeated whitespace clean;
+- Unicode normalization;
+- OCR confidence average/store;
+- raw result preserve, যাতে debug করা যায়।
+
+Example normalized OCR:
+
+```json
+{
+  "raw_text": "Jamuna TV আগামীকাল দেশের সব বিশ্ববিদ্যালয় বন্ধ",
+  "average_confidence": 0.82,
+  "languages": ["bn", "en"]
+}
+```
+
+OCR confidence কম হলে UI user-কে extracted text edit/confirm করার সুযোগ দেবে।
+
+### Step 3 — Gemini claim/source/entity extraction
+
+Gemini-কে image সম্পর্কে open-ended truth question করা হবে না। OCR text দিয়ে strict JSON extraction চাওয়া হবে। Expected fields:
+
+- `claim`: যাচাইযোগ্য মূল statement;
+- `claimed_source`: card/post যে source-এর নাম দাবি করছে;
+- `people`, `organizations`, `places`;
+- `event_date_text` এবং সম্ভব হলে normalized date;
+- `keywords`;
+- `search_queries_bn` ও `search_queries_en`;
+- `needs_user_confirmation`;
+- `ambiguities`।
+
+Prompt principle:
+
+```text
+You are an information extraction component, not a truth judge.
+Use only the OCR text below. Do not decide whether the claim is true.
+Return valid JSON matching the supplied schema. If a field is unknown,
+use null or an empty array. Do not invent missing dates or sources.
+```
+
+Gemini response অবশ্যই backend-side schema validation pass করবে। Invalid JSON হলে one repair attempt; তারপর deterministic fallback extraction ব্যবহার হবে।
+
+### Step 4 — Local open-dataset lookup
+
+API call-এর আগে normalized claim local datasets-এর সঙ্গে compare করা যায়। Dataset-specific adapters common schema-তে data convert করবে:
+
+```json
+{
+  "dataset": "BD-FakeDetect",
+  "record_id": "dataset-specific-id",
+  "claim": "normalized claim text",
+  "label": "dataset-original-label",
+  "source_url": null,
+  "similarity": 0.87
+}
+```
+
+Suggested use:
+
+- **BD-FakeDetect:** Bangla fake/real news examples ও evaluation;
+- **FakePhotoCard-BD:** known fake photo-card matching/evaluation;
+- **BanglaFakeCard:** Bangla fake-card patterns/matching;
+- **FactCheckBD data:** previously fact-checked claim references, যেখানে redistribution/use permitted।
+
+Dataset label final verdict নয়। Old data, annotation errors বা context change হতে পারে। Dataset match evidence item হিসেবে থাকবে এবং original license/terms, attribution ও source provenance preserve করতে হবে।
+
+### Step 5 — Tavily evidence retrieval
+
+Extraction result থেকে 3–6 focused query তৈরি হবে। উদাহরণ:
+
+```text
+"সব বিশ্ববিদ্যালয় বন্ধ" বাংলাদেশ official notice
+site:ugc.gov.bd বিশ্ববিদ্যালয় বন্ধ
+site:jamuna.tv বিশ্ববিদ্যালয় বন্ধ
+"all universities closed" Bangladesh
+```
+
+Tavily request-এর concept:
+
+```json
+{
+  "query": "site:ugc.gov.bd সব বিশ্ববিদ্যালয় বন্ধ",
+  "search_depth": "basic",
+  "max_results": 5,
+  "include_answer": false,
+  "include_raw_content": false
+}
+```
+
+Important rules:
+
+- `include_answer: false`: search provider-generated answer-কে evidence হিসেবে না নেওয়া;
+- URL, title, snippet/content, publish date এবং retrieval time store করা;
+- duplicate/canonical URLs merge করা;
+- official domains আগে রাখা;
+- claimed source-এর official site খোঁজা;
+- relevant fact-check এবং multiple independent news sources include করা;
+- possible original incident এবং older appearance খোঁজা, যেখানে searchable text/context দিয়ে সম্ভব;
+- শুধু search-result count দিয়ে verdict না দেওয়া।
+
+Suggested source priority:
+
+1. government/regulator/official authority notice;
+2. claimed publisher-এর official website;
+3. established fact-check organization;
+4. multiple credible independent news outlets;
+5. other sources—lower weight, clearly labelled।
+
+Social media repost, anonymous blog বা copied aggregator-কে authoritative confirmation ধরা যাবে না।
+
+### Step 6 — Gemini evidence comparison
+
+এবার Gemini-কে claim এবং Tavily/local dataset থেকে পাওয়া bounded evidence list দেওয়া হবে। Model-এর কাজ truth invent করা নয়; প্রত্যেক evidence item-এর supplied text compare করা।
+
+Allowed stance:
+
+- `supports`
+- `contradicts`
+- `mentions_but_unclear`
+- `unrelated`
+- `insufficient_content`
+
+Prompt-এর critical instruction:
+
+```text
+Compare the claim only against the supplied evidence items.
+Do not use memory, general knowledge, or unstated web content.
+For every conclusion, cite the evidence_id. If the supplied text is
+insufficient, return insufficient_content. Do not output a final truth verdict.
+```
+
+Model output example:
+
+```json
+{
+  "comparisons": [
+    {
+      "evidence_id": "ev_01",
+      "stance": "mentions_but_unclear",
+      "relevance": 0.94,
+      "reason": "Official notice says only one institution is closed, not all universities.",
+      "quote": "optional short excerpt from supplied evidence"
+    }
+  ]
+}
+```
+
+Backend verify করবে যে returned `evidence_id` input list-এর মধ্যেই আছে। Unknown citation বাদ যাবে।
+
+### Step 7 — Python evidence fusion
+
+Final status Gemini directly দেবে না। Python deterministic rules ব্যবহার করবে। একটি simple MVP scoring model:
+
+```text
+item_weight = source_weight × relevance × recency_factor × content_quality
+signed_score = +item_weight for supports
+               -item_weight for contradicts
+                0 otherwise
+
+normalized_score = sum(signed_score) / max(sum(item_weight), epsilon)
+```
+
+Example source weights (tune/evaluate করতে হবে):
+
+| Source type | Starting weight |
+|---|---:|
+| Direct official authority | 1.00 |
+| Claimed publisher official page | 0.90 |
+| Established fact-check source | 0.90 |
+| Credible independent newsroom | 0.75 |
+| Open-dataset historical match | 0.60 |
+| Unknown/low-provenance page | 0.20 |
+
+Evidence-label mapping for MVP (only after the evidence gate above passes):
+
+- authoritative direct match → `verified`;
+- strong, consistent supporting evidence → `supported`;
+- correct facts কিন্তু framing/context materially wrong → primary `contradicted` or `unverified`, secondary `misleading` flag only with direct citations;
+- old/different event, date বা location reuse → `context_mismatch` flag only with independent image/provenance evidence;
+- source branding mismatch → `source_impersonation_suspected` flag only with positive corroborating evidence; missing search result alone is insufficient;
+- strong, consistent contradictory evidence → `contradicted`;
+- credible support ও contradiction দুটোই থাকলে → `conflicting`;
+- search হয়েছে কিন্তু confirmation মেলেনি → `unverified`;
+- relevant evidence কম/অসম্পূর্ণ হলে → `insufficient_evidence`;
+- pipeline state `processing` এবং `partial` শুধু top-level `status`-এ থাকবে।
+
+MVP-তে `evidence_coverage` (`low | medium | high`) evidence breadth/quality বোঝাবে—truth probability নয়। Numeric confidence পরে held-out dataset দিয়ে calibrate না করা পর্যন্ত UI/API verdict field-এ দেখানো হবে না। একই publisher-এর syndicated/copy pages একটি independent source হিসেবে count হবে। Hard-coded thresholds pilot dataset-এর ওপর test করতে হবে। “Source impersonation suspected” suspicion বোঝায়, proven fraud নয়।
+
+### Step 8 — SQLite database and history
+
+Suggested tables (SQLAlchemy বা SQLModel ব্যবহার করা যায়):
+
+```text
+analyses
+  id, created_at, status, image_path, image_sha256,
+  ocr_text, ocr_confidence, claim_json,
+  final_label, confidence, explanation, limitations
+
+evidence
+  id, analysis_id, url, canonical_url, title, domain,
+  source_type, published_at, retrieved_at, snippet,
+  stance, relevance, source_weight, item_score
+
+dataset_matches
+  id, analysis_id, dataset_name, record_id,
+  matched_claim, original_label, similarity, provenance
+
+provider_events
+  id, analysis_id, provider, operation, occurred_at,
+  success, status_code, latency_ms, error_code
+
+supported_sources
+  id, outlet_name, official_domain, logo_path, source_type
+
+known_claims
+  id, normalized_claim, verdict, source_url, context, verified_at
+
+evidence_cache
+  query, result_json, cached_at
+```
+
+API keys, full Gemini prompts containing secrets, এবং unnecessary personal data database-এ রাখা যাবে না। Image retention configurable হওয়া উচিত; demo-তে user-এর delete action দেওয়া ভালো।
+
+### Step 9 — Dashboard output
+
+React dashboard-এ দেখাবে:
+
+- uploaded screenshot preview;
+- extracted OCR text এবং edit/confirm option;
+- extracted claim/source/entities;
+- final evidence status + confidence/coverage;
+- “Why this result?” explanation;
+- supporting/contradicting evidence cards with clickable URLs;
+- source type, published date, retrieved time;
+- dataset matches আলাদা section-এ;
+- limitations/fallback banner;
+- four primary cards: **MEDIA, CLAIM, CONTEXT, SOURCE**;
+- original incident বনাম current claim comparison;
+- visual evidence graph;
+- previous analysis history;
+- re-run এবং delete controls।
+
+#### Original incident section
+
+যেখানে evidence পাওয়া যায়, dashboard আলাদা করে দেখাবে:
+
+- original incident, date, location ও possible source;
+- current claimed incident, date ও location;
+- mismatch type এবং supporting evidence IDs।
+
+Example:
+
+```text
+Original: Student protest — July 2024 — Dhaka
+Current claim: Nationwide university closure — November 2026
+Result: Context mismatch
+```
+
+#### Evidence graph
+
+Graph user-কে relationship দ্রুত বুঝতে সাহায্য করবে; এটি verdict engine নয়। Recharts/custom accessible SVG দিয়ে simple node-edge view করা যায়:
+
+```text
+Uploaded Post
+  ├─ Image ───────> July 2024 Student Protest
+  ├─ Headline ────> No credible confirmation
+  └─ Jamuna Logo ─> No official publication match
+                         |
+                         v
+          Context mismatch / source impersonation suspected
+```
+
+Mobile-এ graph-এর পাশাপাশি equivalent text list দিতে হবে, যাতে accessibility ও small-screen readability বজায় থাকে।
+
+---
+
+## Module 5. PWA, mobile UX and offline behavior
+
+Frontend শুরু থেকেই mobile-first হবে—desktop layout shrink করে mobile বানানো যাবে না। Main pages:
+
+1. Landing
+2. Verify
+3. Analysis
+4. Result
+5. History
+6. About / How It Works
+
+### Landing copy
+
+```text
+Can you trust what you're seeing?
+
+Upload a suspicious news screenshot, photocard, or viral post.
+TruthLayer checks the source, claim, context, and media evidence.
+
+[Verify a Post]  [View Previous Checks]
+```
+
+### Analysis progress—not a chatbot
+
+Pipeline progress screen subtle animation দিয়ে এই stages দেখাবে:
+
+1. Reading image
+2. Extracting claim
+3. Identifying source
+4. Checking official publication
+5. Searching supporting evidence
+6. Finding original incident
+7. Comparing context
+8. Analyzing media
+9. Building evidence report
+
+### Native-feeling mobile rules
+
+- bottom safe-area spacing (`env(safe-area-inset-bottom)`);
+- minimum ~44px tap targets;
+- sticky primary action;
+- single-column/vertical evidence cards;
+- collapsible evidence details;
+- readable Bangla font stack and comfortable line height;
+- fast local image preview;
+- install prompt only when useful, never aggressively;
+- no crowded cards, chatbot bubbles, neon/gaming theme বা flashy “AI” animation।
+
+Design language clean investigative/newsroom style হবে। Animation শুধু progress, evidence reveal এবং result transition-এ subtle ভাবে ব্যবহার হবে।
+
+### PWA configuration
+
+`vite-plugin-pwa` দিয়ে implement করুন:
+
+- `manifest.webmanifest`;
+- generated/registered service worker;
+- app name: `TruthLayer BD`;
+- short name: `TruthLayer`;
+- `display: standalone`;
+- `orientation: portrait-primary`;
+- `start_url: /`;
+- theme/background colors;
+- proper maskable/home-screen icons;
+- splash-screen-compatible icon/color metadata;
+- offline fallback page;
+- cached application shell।
+
+Manifest concept:
+
+```json
+{
+  "name": "TruthLayer BD",
+  "short_name": "TruthLayer",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0F3D3E",
+  "background_color": "#F7F5EF",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
+```
+
+### Honest offline behavior
+
+Verification Gemini/Tavily network access-এর ওপর নির্ভর করে। Offline হলে স্পষ্ট দেখাতে হবে:
+
+> **You are offline. Verification requires internet access.**
+
+Offline mode-এ নতুন verification pretend করা যাবে না। তবে service worker/IndexedDB বা cached API responses দিয়ে user:
+
+- cached app shell খুলতে পারবে;
+- previously saved verification list/result দেখতে পারবে;
+- previously loaded evidence report পড়তে পারবে।
+
+Sensitive/provider API responses indiscriminately cache করা যাবে না। Cached report-এ last retrieved time এবং offline/cached badge থাকবে। Network ফিরে এলে retry action enable হবে।
+
+---
+
+## Module 6. Environment configuration
+
+Backend `.env.example`:
+
+```dotenv
+# App
+APP_ENV=development
+APP_SECRET_KEY=replace-with-a-long-random-value
+DATABASE_URL=sqlite:///./data/truthlayer.db
+UPLOAD_DIR=./data/uploads
+MAX_UPLOAD_MB=8
+IMAGE_RETENTION_DAYS=7
+ALLOWED_ORIGINS=http://localhost:5173
+
+# Gemini Developer API — optional; free tier only if available for the account/project
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.8-flash
+GEMINI_FALLBACK_MODEL=gemini-3.5-flash-lite
+GEMINI_ENABLED=true
+GEMINI_TIMEOUT_SECONDS=25
+GEMINI_MAX_RETRIES=1
+
+# Tavily — optional but preferred for live verification
+TAVILY_API_KEY=
+TAVILY_ENABLED=true
+TAVILY_MAX_RESULTS=5
+TAVILY_TIMEOUT_SECONDS=20
+
+# Pipeline / scoring
+MIN_OCR_CONFIDENCE=0.55
+MAX_SEARCH_QUERIES=5
+OFFLINE_DATASET_DIR=./data/datasets
+```
+
+Frontend `.env.example`:
+
+```dotenv
+VITE_API_BASE_URL=http://localhost:8000/api/v1
+```
+
+**Never put `GEMINI_API_KEY` or `TAVILY_API_KEY` in `VITE_*` variables.** Vite frontend variables browser bundle-এ visible হয়। সব third-party API call FastAPI backend থেকে হবে।
+
+Repository `.gitignore`-এ অন্তত রাখুন:
+
+```gitignore
+.env
+.env.*
+!.env.example
+data/uploads/
+*.db
+__pycache__/
+node_modules/
+dist/
+```
+
+---
+
+## Module 7. Exact API call sequence
+
+```text
+1. Browser -> FastAPI
+   POST /api/v1/analyses
+   multipart file=screenshot.png
+
+2. FastAPI -> EasyOCR (local function call)
+   image -> OCR text + confidence
+
+3. FastAPI -> Gemini generate-content API [if enabled/available]
+   OCR text + extraction JSON schema -> structured claim data
+
+4. FastAPI -> local dataset index
+   normalized claim/entities -> similar known records
+
+5. FastAPI -> Tavily Search API [if enabled/available]
+   focused query list -> URLs + snippets/content metadata
+
+6. FastAPI -> Gemini generate-content API [if enabled/available]
+   claim + retrieved evidence -> per-item stance JSON
+
+7. FastAPI -> Python fusion engine
+   validated comparisons + source metadata -> final report
+
+8. FastAPI -> SQLite
+   save analysis + evidence + provider events
+
+9. Browser -> FastAPI
+   GET /api/v1/analyses/{analysis_id}
+   -> dashboard-ready JSON
+```
+
+One analysis may use two Gemini calls: one for extraction and one for evidence comparison. Tavily may receive multiple queries, so deduplication, query limit এবং per-analysis usage cap রাখতে হবে।
+
+---
+
+## Module 8. Suggested FastAPI endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/analyses` | Screenshot upload, analysis start |
+| `GET` | `/api/v1/analyses/{id}` | Current status/full report |
+| `PATCH` | `/api/v1/analyses/{id}/ocr` | User-corrected OCR text submit |
+| `POST` | `/api/v1/analyses/{id}/run` | Corrected text দিয়ে pipeline run/re-run |
+| `GET` | `/api/v1/analyses` | Paginated history |
+| `DELETE` | `/api/v1/analyses/{id}` | Analysis/image delete |
+| `GET` | `/api/v1/health` | App/database health; secret-free provider configuration state |
+
+Competition brief-এর simpler aliases চাইলে নিচের routes expose করা যায়; তবে implementation-এ এক canonical versioned API রাখা cleaner:
+
+| Brief route | Canonical mapping |
+|---|---|
+| `POST /api/verify` | `POST /api/v1/analyses` (image + optional caption) |
+| `GET /api/verification/{id}` | `GET /api/v1/analyses/{id}` |
+| `GET /api/history` | `GET /api/v1/analyses` |
+| `GET /api/supported-sources` | `GET /api/v1/supported-sources` |
+| `GET /api/health` | `GET /api/v1/health` |
+
+Upload response:
+
+```json
+{
+  "analysis_id": "an_01J...",
+  "status": "processing",
+  "status_url": "/api/v1/analyses/an_01J..."
+}
+```
+
+If background queue ব্যবহার না করা হয়, MVP endpoint complete report সরাসরি return করতে পারে। তবে same response schema রাখা ভালো।
+
+---
+
+## Module 9. Suggested JSON response schema
+
+```json
+{
+  "analysis_id": "an_01JEXAMPLE",
+  "created_at": "2026-11-02T10:30:00+06:00",
+  "status": "completed",
+  "input": {
+    "image_url": "/api/v1/analyses/an_01JEXAMPLE/image",
+    "sha256": "..."
+  },
+  "ocr": {
+    "text": "Jamuna TV আগামীকাল দেশের সব বিশ্ববিদ্যালয় বন্ধ",
+    "confidence": 0.82,
+    "needs_confirmation": false
+  },
+  "extraction": {
+    "claim": "আগামীকাল বাংলাদেশের সব বিশ্ববিদ্যালয় বন্ধ থাকবে",
+    "claimed_source": "Jamuna TV",
+    "people": [],
+    "organizations": ["Jamuna TV"],
+    "places": ["Bangladesh"],
+    "event_date_text": "আগামীকাল",
+    "event_date": "2026-11-03",
+    "ambiguities": []
+  },
+  "verification": {
+    "label": "insufficient_evidence",
+    "flags": [],
+    "evidence_coverage": "low",
+    "summary": "The supplied evidence does not establish the claim or image origin.",
+    "decision_method": "python_evidence_fusion_v1"
+  },
+  "layers": {
+    "media": {
+      "status": "inconclusive",
+      "summary": "No strong synthetic-media evidence detected."
+    },
+    "claim": {
+      "status": "unverified",
+      "summary": "No independent confirmation found."
+    },
+    "context": {
+      "status": "inconclusive",
+      "summary": "Image origin has not been established."
+    },
+    "source": {
+      "status": "inconclusive",
+      "summary": "No matching publication was found; absence alone is not proof."
+    }
+  },
+  "original_incident": null,
+  "evidence": [
+    {
+      "evidence_id": "ev_01",
+      "title": "Official notice title",
+      "url": "https://official.example/notice",
+      "domain": "official.example",
+      "source_type": "official_authority",
+      "published_at": "2026-11-02T08:00:00+06:00",
+      "retrieved_at": "2026-11-02T10:30:12+06:00",
+      "stance": "contradicts",
+      "relevance": 0.94,
+      "reason": "The notice concerns one institution and does not establish a nationwide closure."
+    }
+  ],
+  "dataset_matches": [],
+  "providers": {
+    "ocr": "easyocr",
+    "extraction": "gemini",
+    "search": "tavily",
+    "comparison": "gemini"
+  },
+  "limitations": [],
+  "fallbacks_used": []
+}
+```
+
+API failure হলেও HTTP response useful হতে হবে। Provider failure মানেই সবসময় `500` নয়; partial report `200` সহ `status: partial` হতে পারে। Invalid upload-এর জন্য `400/415/422`, missing analysis-এর জন্য `404`, app-level rate limit-এর জন্য `429` ব্যবহার করা যায়।
+
+---
+
+## Module 10. Fallback behavior and quota handling
+
+### Gemini unavailable, no key, quota exhausted বা timeout
+
+- EasyOCR চলবে;
+- simple deterministic extraction: first meaningful lines, quoted text, known source-name list, regex/date parsing;
+- user-কে claim manually edit/confirm করতে বলা হবে;
+- Tavily search confirmed text দিয়ে চলবে;
+- stance classification keyword/rule-based বা manual evidence review mode-এ যাবে;
+- response-এ `fallbacks_used: ["manual_claim_confirmation", "rule_based_comparison"]`;
+- label unsupported confidence-এ force করা যাবে না; প্রয়োজন হলে `partial` বা `insufficient_evidence`।
+
+### Tavily unavailable, no key, quota exhausted বা timeout
+
+- local datasets search করা হবে;
+- previously cached evidence থাকলে clearly marked cached data দেখানো হবে;
+- Gemini-কে নিজের memory থেকে answer করতে বলা যাবে না;
+- live evidence না থাকলে `insufficient_evidence` বা `partial` status;
+- dashboard banner: “Live web retrieval unavailable; result is based only on local/historical data.”
+
+### Both Gemini and Tavily unavailable
+
+- upload + OCR + manual correction + local dataset matching + history কাজ করবে;
+- কোনো current truth verdict নয়;
+- user claim ও suggested search queries copy করে manual research করতে পারবে।
+
+### EasyOCR low confidence/failure
+
+- preprocessing retry: resize, grayscale, contrast/threshold;
+- user-entered text গ্রহণ;
+- low-confidence OCR থেকে silently search না করা।
+
+### General resilience
+
+- exponential backoff only for retryable `429/5xx`, maximum one or two retries;
+- strict per-call timeout;
+- provider error body user-কে expose না করা;
+- request/response secrets log না করা;
+- cached query result use করলে retrieval timestamp দেখানো;
+- per-analysis API budget enforce করা;
+- same image hash-এর recent completed analysis reuse করার option।
+
+Structured error shape:
+
+```json
+{
+  "error": {
+    "code": "LIVE_SEARCH_RATE_LIMITED",
+    "message": "Live web verification temporarily unavailable.",
+    "retryable": true,
+    "analysis_id": "an_01JEXAMPLE",
+    "preserved_data": ["image", "ocr", "extraction"]
+  }
+}
+```
+
+Explicitly handle unreadable/malformed image, OCR failure, unsupported/unknown source, no web evidence, API timeout/rate limit, network loss এবং invalid provider response। Gemini limit হলে OCR preserve ও retry-later action দিন। Tavily limit হলে dataset/database evidence use করে **Live web verification temporarily unavailable** banner দেখান।
+
+---
+
+## Module 11. API key and security guidance
+
+1. API keys শুধু FastAPI server-এর `.env`/hosting secret manager-এ রাখুন।
+2. `.env` commit করবেন না; `.env.example`-এ blank placeholder রাখুন।
+3. Frontend বা browser network call থেকে provider key expose করবেন না।
+4. Logs, screenshots, error messages এবং database records-এ key redact করুন।
+5. Key accidentally publish হলে immediately revoke/rotate করুন।
+6. Provider dashboard-এ quota/budget limits set করা গেলে set করুন।
+7. CORS শুধু trusted frontend origin-এর জন্য allow করুন; `*` production-এ নয়।
+8. Upload size/type/signature validate এবং generated filename ব্যবহার করুন।
+9. Public deployment-এ rate limiting যোগ করুন—IP/session-based, যেমন analyses per minute/day।
+10. URLs safely render করুন; fetched HTML সরাসরি dashboard-এ inject করবেন না।
+11. Search result content untrusted input হিসেবে treat করুন; prompt injection ignore করার instruction দিন এবং provider output schema validate করুন।
+12. User image retention policy দেখান এবং delete endpoint দিন।
+13. Dataset licenses, attribution, privacy এবং redistribution restrictions verify করুন।
+14. App authentication scope-এ না থাকলে user passwords, OTPs বা private account information collect/store করবেন না।
+
+---
+
+## Module 12. Small example walkthrough
+
+User একটি Jamuna TV-style photocard upload করল, যেখানে লেখা:
+
+> “Jamuna TV: আগামীকাল দেশের সব বিশ্ববিদ্যালয় ১৫ দিনের জন্য বন্ধ”
+
+Image-এ একটি student protest দেখা যাচ্ছে।
+
+### A. OCR
+
+EasyOCR returns:
+
+```text
+Jamuna TV আগামীকাল দেশের সব বিশ্ববিদ্যালয় ১৫ দিনের জন্য বন্ধ
+```
+
+### B. Gemini extraction
+
+Gemini truth verdict না দিয়ে structured data দেয়:
+
+```json
+{
+  "claim": "আগামীকাল থেকে বাংলাদেশের সব বিশ্ববিদ্যালয় ১৫ দিনের জন্য বন্ধ থাকবে",
+  "claimed_source": "Jamuna TV",
+  "organizations": ["Jamuna TV"],
+  "places": ["Bangladesh"],
+  "event_date_text": "আগামীকাল",
+  "search_queries_bn": [
+    "সব বিশ্ববিদ্যালয় বন্ধ বাংলাদেশ official notice",
+    "Jamuna TV সব বিশ্ববিদ্যালয় বন্ধ"
+  ]
+}
+```
+
+### C. Tavily retrieval
+
+Backend searches for:
+
+- official education/UGC notice;
+- Jamuna TV official matching report;
+- credible independent coverage;
+- relevant fact-check page।
+
+ধরা যাক Jamuna TV official site-এ matching report নেই, credible independent confirmation নেই এবং similar image July 2024-এর Dhaka student protest-এর সঙ্গে linked। Search results source text/metadata হিসেবে store হয়। Search absence একা proof নয়।
+
+### D. Gemini comparison
+
+Gemini supplied evidence-কে compare করে:
+
+- historical protest evidence → current event framing-এর সঙ্গে `contradicts`/context mismatch;
+- unrelated closure report → `mentions_but_unclear`;
+- matching Jamuna page না পাওয়া → standalone proof নয়; source-check signal;
+- no credible confirmation → insufficient support signal।
+
+### E. Python fusion
+
+Historical context evidence, claimed outlet mismatch এবং lack of independent confirmation একসঙ্গে fuse হয়। Rules threshold পূরণ করলে engine `misleading` বা `context_mismatch` এবং secondary flag `source_impersonation_suspected` দেয়। Logo mismatch একা fraud prove করে না।
+
+### F. Dashboard
+
+User দেখে:
+
+```text
+Status: Likely misleading — context mismatch
+Confidence/Coverage: High (0.86)
+
+Why:
+- Image appears linked to a July 2024 student protest in Dhaka.
+- No matching publication was found from the claimed outlet.
+- No supplied credible evidence supports a nationwide 15-day closure.
+
+Important limitation:
+- This result reflects evidence retrieved at the displayed time.
+```
+
+প্রতিটি reason-এর সঙ্গে evidence URL থাকবে, যাতে user নিজে verify করতে পারে।
+
+---
+
+## Module 13. Suggested project structure
+
+```text
+backend/
+  app/
+    main.py
+    api/
+      analyses.py
+    core/
+      config.py
+      security.py
+    services/
+      image_service.py
+      ocr_service.py
+      gemini_service.py
+      tavily_service.py
+      dataset_service.py
+      evidence_fusion.py
+    schemas/
+      analysis.py
+      providers.py
+    models/
+      analysis.py
+      evidence.py
+    db/
+      session.py
+    prompts/
+      extract_claim.txt
+      compare_evidence.txt
+  data/
+    datasets/
+    uploads/
+  .env.example
+```
+
+Frontend:
+
+```text
+frontend/
+  public/
+    icons/
+    offline.html
+  src/
+    api/
+      truthlayer.ts
+    components/
+      UploadCard.tsx
+      OcrEditor.tsx
+      VerificationSummary.tsx
+      EvidenceCard.tsx
+      LimitationsBanner.tsx
+      HistoryList.tsx
+      EvidenceGraph.tsx
+      OfflineBanner.tsx
+    pages/
+      HomePage.tsx
+      AnalysisPage.tsx
+      HistoryPage.tsx
+      AboutPage.tsx
+    pwa/
+      registerServiceWorker.ts
+  vite.config.ts
+```
+
+---
+
+## Module 14. Testing and evaluation checklist
+
+- OCR test: clear/blurred, Bangla/English mixed, different fonts;
+- extraction test: missing source/date, multiple claims, malformed OCR;
+- prompt test: evidence page-এর prompt-injection-like text ignore হয় কি না;
+- retrieval test: official domain appears, duplicate URLs removed;
+- comparison test: every conclusion valid `evidence_id` cite করে;
+- fusion unit test: support, contradiction, conflict, insufficient cases;
+- quota test: Gemini/Tavily `429`, timeout এবং invalid key;
+- upload security test: wrong extension, oversized/corrupt file, path-like filename;
+- privacy test: delete action image ও related records clean করে;
+- PWA test: installability, manifest/icons, standalone launch, service-worker update;
+- offline test: new verification blocked honestly; cached reports remain readable;
+- mobile test: camera/gallery/paste, safe area, tap targets, Bangla text wrapping;
+- four-layer test: media/claim/context/source independently show unknown state when evidence is missing;
+- dataset evaluation: held-out samples দিয়ে precision/recall/confusion matrix;
+- human review: explanation ও links দেখে reviewer decision reproduce করতে পারে কি না।
+
+---
+
+## Module 15. Competition MVP implementation order
+
+1. Mobile-first React/TypeScript upload (gallery/camera/paste) + FastAPI image endpoint;
+2. EasyOCR + editable OCR output;
+3. SQLite analysis/history;
+4. Gemini structured extraction with fallback;
+5. Tavily retrieval, deduplication এবং source ranking;
+6. Gemini bounded evidence comparison;
+7. Python evidence fusion + limitations;
+8. four-layer dashboard with inconclusive media/context, cited evidence cards/history/delete;
+9. PWA installable shell;
+10. Next phase: image provenance/original incident, local dataset adapters, evidence graph, offline cached reports;
+11. error/quota/security tests, stable demo cases and polish।
+
+Competition deadline **November 4** ধরে priority order:
+
+1. working verification pipeline;
+2. clean evidence dashboard;
+3. reliable source/claim/context flow;
+4. mobile usability;
+5. PWA installation;
+6. stable pre-tested demo cases;
+7. strong error handling।
+
+Giant model training, complex deepfake model বা low-value animation MVP-এর critical path নয়। Retrieval + structured verification + honest limitations-এ focus করুন।
+
+---
+
+## Module 16. Non-negotiable verification principles
+
+- **Gemini memory is not evidence.**
+- **Tavily is a retrieval channel, not the judge.** Its returned sources must be inspected, ranked and cited.
+- **Search absence is not proof of falsehood.**
+- **Final label comes from transparent Python fusion rules, not an unrestricted LLM answer.**
+- **Every important conclusion should trace back to an evidence ID and URL.**
+- **When evidence is weak or APIs fail, say “insufficient/partial”—never fabricate certainty.**
+- **Free-tier availability is optional infrastructure, not a promise.** The application must remain honest and usable in fallback mode.
+- **Offline mode never pretends that live verification ran.**
+- **Media, Claim, Context and Source can disagree; preserve each layer instead of collapsing evidence too early.**
+
+Final positioning:
+
+> **TruthLayer BD is a mobile-first PWA verification engine for suspicious Bangladeshi news screenshots and photocards. It verifies Media + Claim + Context + Source and shows users the evidence before they decide whether to trust or share a story.**
+
+এই design buildathon demo-তে technically defensible: AI extraction ও summarization দ্রুত করে, search current evidence আনে, আর deterministic backend rules result-কে explainable ও auditable রাখে।

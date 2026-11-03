@@ -1,0 +1,5 @@
+[
+  {"name": "official_support", "expected": "verified", "sources": [{"domain": "authority.example", "type": "official_authority", "stance": "supports"}]},
+  {"name": "independent_conflict", "expected": "conflicting", "sources": [{"domain": "news-one.example", "type": "independent_news", "stance": "supports"}, {"domain": "news-two.example", "type": "fact_check", "stance": "contradicts"}]},
+  {"name": "no_relevant_source", "expected": "insufficient_evidence", "sources": []}
+]
