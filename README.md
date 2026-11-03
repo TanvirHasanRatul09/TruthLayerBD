@@ -71,34 +71,3 @@ The four PNG cards in `docs/manual-test-cases/` cover the complete upload flow. 
 
 From `backend/`, run `.\.venv\Scripts\python.exe -m pytest`. This includes deterministic end-to-end tests using all four browser cards and synthetic provider responses. From `frontend/`, run `npm run build`, then `node --test tests/phase8.test.mjs tests/phase9.test.mjs tests/phase11.test.mjs`. Live verdicts depend on provider access and the sources returned at test time.
 
-## Free temporary share link on Windows
-
-This is for a short demo from your own computer. It uses a Cloudflare Quick Tunnel, which needs no hosting account or domain. Keep your computer and the terminal windows running; the link changes each time. Allow only invited email addresses because this build has shared History and no per-user access control. Use disposable test images. See [Cloudflare's Quick Tunnel guide](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/).
-
-1. Install the current `cloudflared` for Windows from [Cloudflare's downloads](https://developers.cloudflare.com/tunnel/downloads/). Open a new PowerShell window and check `cloudflared --version`.
-2. In the repository's `frontend` directory, build with a same-origin API address:
-
-   ```powershell
-   cd D:\ostad\TruthLayerBD\frontend
-   $env:VITE_API_BASE_URL='/api/v1'
-   npm run build
-   ```
-
-3. In a second PowerShell window, start the backend, which now serves the built frontend at the same address:
-
-   ```powershell
-   cd D:\ostad\TruthLayerBD\backend
-   .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-   ```
-
-   Check `http://127.0.0.1:8000/` and `http://127.0.0.1:8000/api/v1/health` before sharing.
-
-4. In a third PowerShell window, start the tunnel. Replace the example address with the email of someone you are inviting; add more addresses with a comma:
-
-   ```powershell
-   cloudflared tunnel --url http://127.0.0.1:8000 --allowed-mail 'friend@example.com'
-   ```
-
-5. Share the printed `https://...trycloudflare.com` link. The visitor enters their allowed email and the one-time code sent to it. Test upload, report, History, and image loading through that link. Stop the tunnel with `Ctrl+C` when finished.
-
-Quick Tunnels are for development and have no uptime guarantee. This is not a permanent public deployment. Never put Gemini or Tavily keys into `VITE_*` variables.
