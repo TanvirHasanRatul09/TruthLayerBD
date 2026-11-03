@@ -18,6 +18,13 @@ class Analysis(SQLModel, table=True):
     caption: str | None = None
 
 
+class AnalysisOwner(SQLModel, table=True):
+    __tablename__ = "analysis_owners"
+
+    analysis_id: str = Field(primary_key=True, foreign_key="analyses.id")
+    owner_id: str = Field(index=True)
+
+
 class ProviderEvent(SQLModel, table=True):
     __tablename__ = "provider_events"
 

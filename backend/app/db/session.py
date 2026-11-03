@@ -6,11 +6,11 @@ from sqlalchemy import event, inspect
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.config import get_settings
-from app.models.analysis import Analysis, ExtractionRecord, OcrRecord, ProviderEvent  # noqa: F401 - register tables
+from app.models.analysis import Analysis, AnalysisOwner, ExtractionRecord, OcrRecord, ProviderEvent  # noqa: F401 - register tables
 from app.models.evidence import ComparisonRecord, Evidence, RetrievalRun, VerificationRecord  # noqa: F401 - register tables
 from app.models.dataset import DatasetMatch  # noqa: F401 - register tables
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def check_schema(engine) -> None:
@@ -28,7 +28,7 @@ def check_schema(engine) -> None:
             version = connection.exec_driver_sql("PRAGMA user_version").scalar_one()
             if version > SCHEMA_VERSION:
                 raise RuntimeError(f"Database schema version {version} is newer than this app supports ({SCHEMA_VERSION}).")
-            if version == 0:
+            if version < SCHEMA_VERSION:
                 connection.exec_driver_sql(f"PRAGMA user_version={SCHEMA_VERSION}")
 
 

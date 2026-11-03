@@ -1,0 +1,17 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: backend/.env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: sqlite:///./data/truthlayer.db
+      UPLOAD_DIR: ./data/uploads
+      OFFLINE_DATASET_DIR: ./data/datasets
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - truthlayer_data:/app/backend/data
+
+volumes:
+  truthlayer_data:

@@ -9,7 +9,8 @@ from sqlmodel import Session, func, select
 
 from app.core.config import get_settings
 from app.db.session import get_session
-from app.models.analysis import Analysis, ExtractionRecord, OcrRecord, ProviderEvent, utc_now
+from app.models.analysis import Analysis, AnalysisOwner, ExtractionRecord, OcrRecord, ProviderEvent, utc_now
+from app.core.visitor import visitor_id
 from app.models.evidence import ComparisonRecord, Evidence, RetrievalRun, VerificationRecord
 from app.models.dataset import DatasetMatch
 from app.schemas.analysis import AnalysisPage, AnalysisRead, LayerRead, OcrCorrection, OcrRead, RunRequest, UploadResponse, VerificationRead
@@ -22,10 +23,21 @@ from app.services import dataset_service
 router = APIRouter(prefix="/analyses", tags=["analyses"])
 
 
+def owned_analysis(analysis_id: str, owner_id: str, session: Session) -> Analysis:
+    owner = session.get(AnalysisOwner, analysis_id)
+    if owner is None or owner.owner_id != owner_id:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+    analysis = session.get(Analysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="Analysis not found.")
+    return analysis
+
+
 @router.post("", response_model=UploadResponse, status_code=201)
 async def upload_analysis(
     file: UploadFile = File(...),
     caption: str | None = Form(None, max_length=500),
+    owner_id: str = Depends(visitor_id),
     session: Session = Depends(get_session),
 ) -> UploadResponse:
     settings = get_settings()
@@ -39,6 +51,7 @@ async def upload_analysis(
     )
     try:
         session.add(analysis)
+        session.add(AnalysisOwner(analysis_id=analysis_id, owner_id=owner_id))
         session.commit()
     except Exception:
         session.rollback()
@@ -183,27 +196,23 @@ def clear_dataset_matches(analysis_id: str, session: Session) -> None:
 
 
 @router.get("", response_model=AnalysisPage)
-def list_analyses(limit: int = 20, offset: int = 0, session: Session = Depends(get_session)) -> AnalysisPage:
+def list_analyses(limit: int = 20, offset: int = 0, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> AnalysisPage:
     if not 1 <= limit <= 100 or offset < 0:
         raise HTTPException(status_code=422, detail="Invalid pagination parameters.")
-    total = session.exec(select(func.count()).select_from(Analysis)).one()
-    analyses = session.exec(select(Analysis).order_by(Analysis.created_at.desc(), Analysis.id.desc()).offset(offset).limit(limit)).all()
+    total = session.exec(select(func.count()).select_from(Analysis).join(AnalysisOwner).where(AnalysisOwner.owner_id == owner_id)).one()
+    analyses = session.exec(select(Analysis).join(AnalysisOwner).where(AnalysisOwner.owner_id == owner_id).order_by(Analysis.created_at.desc(), Analysis.id.desc()).offset(offset).limit(limit)).all()
     return AnalysisPage(items=[to_read(item, session) for item in analyses], total=total, limit=limit, offset=offset)
 
 
 @router.get("/{analysis_id}", response_model=AnalysisRead)
-def get_analysis(analysis_id: str, session: Session = Depends(get_session)) -> AnalysisRead:
-    analysis = session.get(Analysis, analysis_id)
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+def get_analysis(analysis_id: str, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> AnalysisRead:
+    analysis = owned_analysis(analysis_id, owner_id, session)
     return to_read(analysis, session)
 
 
 @router.patch("/{analysis_id}/ocr", response_model=AnalysisRead)
-def correct_ocr(analysis_id: str, correction: OcrCorrection, session: Session = Depends(get_session)) -> AnalysisRead:
-    analysis = session.get(Analysis, analysis_id)
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+def correct_ocr(analysis_id: str, correction: OcrCorrection, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> AnalysisRead:
+    analysis = owned_analysis(analysis_id, owner_id, session)
     text = ocr_service.normalize_text(correction.text)
     if not text:
         raise HTTPException(status_code=422, detail="OCR text cannot be empty.")
@@ -224,10 +233,8 @@ def correct_ocr(analysis_id: str, correction: OcrCorrection, session: Session = 
 
 
 @router.post("/{analysis_id}/ocr/vision-retry", response_model=AnalysisRead)
-async def retry_ocr_with_vision(analysis_id: str, session: Session = Depends(get_session)) -> AnalysisRead:
-    analysis = session.get(Analysis, analysis_id)
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+async def retry_ocr_with_vision(analysis_id: str, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> AnalysisRead:
+    analysis = owned_analysis(analysis_id, owner_id, session)
     settings = get_settings()
     if not settings.gemini_enabled or not settings.gemini_api_key:
         raise HTTPException(status_code=503, detail="AI image reading is not configured.")
@@ -262,10 +269,8 @@ async def retry_ocr_with_vision(analysis_id: str, session: Session = Depends(get
 
 
 @router.post("/{analysis_id}/run", response_model=AnalysisRead)
-async def run_extraction(analysis_id: str, request: RunRequest, session: Session = Depends(get_session)) -> AnalysisRead:
-    analysis = session.get(Analysis, analysis_id)
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+async def run_extraction(analysis_id: str, request: RunRequest, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> AnalysisRead:
+    analysis = owned_analysis(analysis_id, owner_id, session)
     ocr_record = session.get(OcrRecord, analysis_id)
     if ocr_record is None or ocr_record.needs_confirmation or not ocr_record.text.strip():
         raise HTTPException(status_code=409, detail="Confirm OCR text before claim extraction.")
@@ -311,10 +316,8 @@ async def run_extraction(analysis_id: str, request: RunRequest, session: Session
 
 
 @router.post("/{analysis_id}/retrieve", response_model=AnalysisRead)
-async def retrieve_evidence(analysis_id: str, session: Session = Depends(get_session)) -> AnalysisRead:
-    analysis = session.get(Analysis, analysis_id)
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+async def retrieve_evidence(analysis_id: str, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> AnalysisRead:
+    analysis = owned_analysis(analysis_id, owner_id, session)
     ocr_record = session.get(OcrRecord, analysis_id)
     extraction_record = session.get(ExtractionRecord, analysis_id)
     if ocr_record is None or ocr_record.needs_confirmation or extraction_record is None:
@@ -371,10 +374,8 @@ async def retrieve_evidence(analysis_id: str, session: Session = Depends(get_ses
 
 
 @router.post("/{analysis_id}/match", response_model=AnalysisRead)
-async def match_dataset(analysis_id: str, session: Session = Depends(get_session)) -> AnalysisRead:
-    analysis = session.get(Analysis, analysis_id)
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+async def match_dataset(analysis_id: str, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> AnalysisRead:
+    analysis = owned_analysis(analysis_id, owner_id, session)
     extraction_record = session.get(ExtractionRecord, analysis_id)
     claim = ClaimExtraction.model_validate_json(extraction_record.data_json) if extraction_record else None
     confirmed_claim = claim.claim if claim and not claim.needs_user_confirmation else None
@@ -390,10 +391,8 @@ async def match_dataset(analysis_id: str, session: Session = Depends(get_session
 
 
 @router.post("/{analysis_id}/verify", response_model=AnalysisRead)
-async def verify_evidence(analysis_id: str, session: Session = Depends(get_session)) -> AnalysisRead:
-    analysis = session.get(Analysis, analysis_id)
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+async def verify_evidence(analysis_id: str, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> AnalysisRead:
+    analysis = owned_analysis(analysis_id, owner_id, session)
     retrieval = session.get(RetrievalRun, analysis_id)
     extraction = session.get(ExtractionRecord, analysis_id)
     if retrieval is None or extraction is None:
@@ -433,9 +432,8 @@ async def verify_evidence(analysis_id: str, session: Session = Depends(get_sessi
 
 
 @router.get("/{analysis_id}/image")
-def get_image(analysis_id: str, session: Session = Depends(get_session)) -> FileResponse:
-    if session.get(Analysis, analysis_id) is None:
-        raise HTTPException(status_code=404, detail="Image not found.")
+def get_image(analysis_id: str, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> FileResponse:
+    owned_analysis(analysis_id, owner_id, session)
     path = find_image(analysis_id, get_settings())
     if path is None:
         raise HTTPException(status_code=404, detail="Image not found.")
@@ -444,10 +442,8 @@ def get_image(analysis_id: str, session: Session = Depends(get_session)) -> File
 
 
 @router.delete("/{analysis_id}", status_code=204)
-def delete_analysis(analysis_id: str, session: Session = Depends(get_session)) -> None:
-    analysis = session.get(Analysis, analysis_id)
-    if analysis is None:
-        raise HTTPException(status_code=404, detail="Analysis not found.")
+def delete_analysis(analysis_id: str, owner_id: str = Depends(visitor_id), session: Session = Depends(get_session)) -> None:
+    analysis = owned_analysis(analysis_id, owner_id, session)
     events = session.exec(select(ProviderEvent).where(ProviderEvent.analysis_id == analysis_id)).all()
     for event in events:
         session.delete(event)
@@ -463,6 +459,8 @@ def delete_analysis(analysis_id: str, session: Session = Depends(get_session)) -
         session.delete(extraction_record)
         session.flush()
     image_path = Path(analysis.image_path)
+    session.delete(session.get(AnalysisOwner, analysis_id))
+    session.flush()
     session.delete(analysis)
     session.commit()
     image_path.unlink(missing_ok=True)
