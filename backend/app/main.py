@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import get_settings
 from app.api.analyses import router as analyses_router
 from app.core.rate_limit import rate_limit_middleware
+from app.core.visitor import visitor_session_middleware
 from app.db.session import get_engine
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    if settings.app_env == "production" and (settings.app_secret_key == "replace-with-a-long-random-value" or len(settings.app_secret_key) < 32):
+        raise RuntimeError("Set a unique APP_SECRET_KEY of at least 32 characters before production startup.")
     get_engine(get_settings().database_url)
     yield
 
@@ -26,12 +30,13 @@ app = FastAPI(title="TruthLayer BD API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 app.include_router(analyses_router, prefix="/api/v1")
 app.middleware("http")(rate_limit_middleware)
+app.middleware("http")(visitor_session_middleware)
 
 
 @app.middleware("http")

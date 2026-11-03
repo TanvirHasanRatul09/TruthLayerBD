@@ -144,13 +144,16 @@ def test_blank_ocr_or_unknown_analysis_rejected(client, monkeypatch):
     assert manual.json()["ocr"]["text"] == "নিজের লেখা"
 
 
-def test_existing_phase3_analysis_can_receive_manual_text(client):
+def test_unowned_legacy_analysis_is_hidden_but_preserved(client):
     with Session(get_engine(get_settings().database_url)) as session:
         session.add(Analysis(id="an_" + "a" * 32, image_path="legacy.png", image_sha256="x" * 64))
         session.commit()
     response = client.patch("/api/v1/analyses/an_" + "a" * 32 + "/ocr", json={"text": "পুরোনো ছবি"})
-    assert response.status_code == 200
-    assert response.json()["ocr"]["needs_confirmation"] is False
+    assert response.status_code == 404
+    assert client.get("/api/v1/analyses/an_" + "a" * 32).status_code == 404
+    assert client.get("/api/v1/analyses").json()["total"] == 0
+    with Session(get_engine(get_settings().database_url)) as session:
+        assert session.get(Analysis, "an_" + "a" * 32) is not None
 
 
 def test_vision_retry_requires_confirmation_and_clears_old_claim(client, monkeypatch):

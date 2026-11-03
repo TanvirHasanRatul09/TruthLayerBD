@@ -102,8 +102,9 @@ export type EvidenceResult = {
 
 export type AnalysisList = { items: AnalysisRead[]; total: number; limit: number; offset: number }
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 const requireOnline = () => { if (!navigator.onLine) throw new Error('ইন্টারনেট সংযোগ নেই। সংযোগ ফিরে এলে আবার চেষ্টা করুন।') }
+const apiFetch = (url: string, options: RequestInit = {}) => fetch(url, { ...options, credentials: 'include' })
 
 export async function uploadAnalysis(file: File, caption: string): Promise<UploadResult> {
   requireOnline()
@@ -111,7 +112,7 @@ export async function uploadAnalysis(file: File, caption: string): Promise<Uploa
   body.append('file', file)
   if (caption.trim()) body.append('caption', caption.trim())
   let response: Response
-  try { response = await fetch(`${apiBaseUrl}/analyses`, { method: 'POST', body }) }
+  try { response = await apiFetch(`${apiBaseUrl}/analyses`, { method: 'POST', body }) }
   catch { throw new Error('ছবি পাঠানো যায়নি। সংযোগ পরীক্ষা করে আবার চেষ্টা করুন; বাছাই করা ছবিটি এখানেই আছে।') }
   if (!response.ok) {
     const messages: Record<number, string> = {
@@ -132,7 +133,7 @@ export function imageUrl(path: string): string {
 
 export async function saveOcrText(analysisId: string, text: string): Promise<OcrResult> {
   requireOnline()
-  const response = await fetch(`${apiBaseUrl}/analyses/${analysisId}/ocr`, {
+  const response = await apiFetch(`${apiBaseUrl}/analyses/${analysisId}/ocr`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
@@ -149,12 +150,12 @@ export async function saveOcrText(analysisId: string, text: string): Promise<Ocr
 
 export function retryOcrWithVision(analysisId: string): Promise<AnalysisRead> {
   requireOnline()
-  return fetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}/ocr/vision-retry`, { method: 'POST' }).then(readResponse<AnalysisRead>).then(value => { removeCachedReport(analysisId); return value })
+  return apiFetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}/ocr/vision-retry`, { method: 'POST' }).then(readResponse<AnalysisRead>).then(value => { removeCachedReport(analysisId); return value })
 }
 
 export async function runExtraction(analysisId: string, claim?: string): Promise<AnalysisRead> {
   requireOnline()
-  const response = await fetch(`${apiBaseUrl}/analyses/${analysisId}/run`, {
+  const response = await apiFetch(`${apiBaseUrl}/analyses/${analysisId}/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(claim === undefined ? {} : { claim }),
@@ -169,7 +170,7 @@ export async function runExtraction(analysisId: string, claim?: string): Promise
 
 export async function retrieveEvidence(analysisId: string): Promise<AnalysisRead> {
   requireOnline()
-  const response = await fetch(`${apiBaseUrl}/analyses/${analysisId}/retrieve`, { method: 'POST' })
+  const response = await apiFetch(`${apiBaseUrl}/analyses/${analysisId}/retrieve`, { method: 'POST' })
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
     throw new Error(typeof payload?.detail === 'string' ? payload.detail : `Search failed (${response.status}).`)
@@ -187,25 +188,25 @@ async function readResponse<T>(response: Response): Promise<T> {
 }
 
 export function getAnalysis(analysisId: string): Promise<AnalysisRead> {
-  return fetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}`).then(readResponse<AnalysisRead>).then(value => { if (value.verification && value.status !== 'processing' && value.status !== 'failed') saveCachedReport(value); else if (!value.verification) removeCachedReport(analysisId); return value })
+  return apiFetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}`).then(readResponse<AnalysisRead>).then(value => { if (value.verification && value.status !== 'processing' && value.status !== 'failed') saveCachedReport(value); else if (!value.verification) removeCachedReport(analysisId); return value })
 }
 
 export function listAnalyses(limit = 20, offset = 0): Promise<AnalysisList> {
-  return fetch(`${apiBaseUrl}/analyses?limit=${limit}&offset=${offset}`).then(readResponse<AnalysisList>).then(page => { page.items.forEach(item => { if (item.verification && item.status !== 'processing' && item.status !== 'failed') saveCachedReport(item) }); return page })
+  return apiFetch(`${apiBaseUrl}/analyses?limit=${limit}&offset=${offset}`).then(readResponse<AnalysisList>).then(page => { page.items.forEach(item => { if (item.verification && item.status !== 'processing' && item.status !== 'failed') saveCachedReport(item) }); return page })
 }
 
 export function verifyAnalysis(analysisId: string): Promise<AnalysisRead> {
   requireOnline()
-  return fetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}/verify`, { method: 'POST' }).then(readResponse<AnalysisRead>).then(value => { saveCachedReport(value); return value })
+  return apiFetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}/verify`, { method: 'POST' }).then(readResponse<AnalysisRead>).then(value => { saveCachedReport(value); return value })
 }
 
 export function matchDataset(analysisId: string): Promise<AnalysisRead> {
   requireOnline()
-  return fetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}/match`, { method: 'POST' }).then(readResponse<AnalysisRead>).then(value => { saveCachedReport(value); return value })
+  return apiFetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}/match`, { method: 'POST' }).then(readResponse<AnalysisRead>).then(value => { saveCachedReport(value); return value })
 }
 
 export async function deleteAnalysis(analysisId: string): Promise<void> {
-  const response = await fetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}`, { method: 'DELETE' })
+  const response = await apiFetch(`${apiBaseUrl}/analyses/${encodeURIComponent(analysisId)}`, { method: 'DELETE' })
   if (!response.ok) throw new Error(`Delete failed (${response.status}).`)
   removeCachedReport(analysisId)
 }
