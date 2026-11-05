@@ -1,82 +1,103 @@
 # TruthLayer BD
 
-TruthLayer BD is a React/Vite and FastAPI app for checking claims in news cards and screenshots. It keeps SQLite history, reads Bangla/English text with EasyOCR, uses Gemini for bounded claim extraction and source comparison when available, retrieves current links with Tavily, and shows a cited report. The root-level `TruthLayer-BD` guide is the product specification.
+TruthLayer BD helps people check a claim in a news image. Upload a JPEG, PNG, or WebP image and the app reads its text, identifies the main claim, searches for relevant sources, and produces a short report: **True**, **False**, or **Could not verify**. It shows a reason and a link beside each supported or corrected fact. A missing search result is never proof that a claim is false.
 
-The [28-card evidence-first test run](docs/manual-test-cases/EVIDENCE_FIRST_TEST_RUN_2026-11-05.md) records live-provider outcomes, browser checks, and unresolved cases. **Could not verify** means the available evidence did not establish a safe True or False finding; it does not mean the claim is false.
+The interface is available in **বাংলা and English**. Reports and History belong to a private browser session; no account is required. Previously opened reports can be viewed offline on that device. New uploads and searches require internet access. Clearing browser data or switching devices loses access to that browser's History.
 
-## Run frontend and backend locally
+## How it works
 
-These commands use **PowerShell on Windows**. Install Python 3.11 or newer and Node.js with npm first. Run the commands from the repository root (`D:\ostad\TruthLayerBD`). Keep two terminals open: one for the backend and one for the frontend.
+1. EasyOCR reads the image. If the text or main claim is unclear, the app asks for one correction.
+2. Tavily searches for sources. Gemini assists with claim extraction and evidence comparison when available.
+3. The report puts the result and reason first; source cards and limitations are under **View evidence**.
+4. Claim accuracy, publisher identity, and image authenticity remain separate. A logo or matching news story alone does not prove who created the uploaded image.
 
-### One-time setup
+The frontend uses React, Vite, and TypeScript. The backend uses FastAPI and SQLite. FastAPI can also serve the built frontend from one public origin.
 
-In the **backend terminal**:
+## Run it for the first time
+
+### Prerequisites
+
+Install Python **3.11 or newer**, Node.js **22 or newer** with npm, and Git. Internet access is needed for the first OCR model download and for live source searches. The commands below use **PowerShell on Windows**.
+
+Clone the repository and open two terminals in its root folder:
 
 ```powershell
-cd D:\ostad\TruthLayerBD\backend
+git clone https://github.com/TanvirHasanRatul09/TruthLayerBD.git
+cd TruthLayerBD
+```
+
+If you downloaded a ZIP, open the extracted folder instead.
+
+### Set up the backend (terminal 1)
+
+```powershell
+cd backend
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-In the **frontend terminal**:
+Edit `backend/.env`. Add your own `GEMINI_API_KEY` and `TAVILY_API_KEY` for live analysis. You can start without keys, but searches or comparisons may be unavailable and reports may say **Could not verify**. Keep keys only in the backend environment; never commit `.env` or put keys in a `VITE_*` setting.
+
+The first OCR request downloads Bangla and English model files into `backend/data/models/`. This may take several minutes and needs disk space. If OCR cannot read the image, the app lets you enter the claim manually.
+
+### Set up the frontend (terminal 2)
+
+From the repository root:
 
 ```powershell
-cd D:\ostad\TruthLayerBD\frontend
+cd frontend
 npm install
 Copy-Item .env.example .env
 ```
 
-The example environment files already connect the frontend at port **5173** to the backend at port **8000**. To enable Gemini or Tavily, add the respective API keys to `backend/.env`. Leave the keys blank to run without those providers. Do not put provider keys in `frontend/.env` or any `VITE_*` variable.
+The example frontend setting points to the backend at `http://localhost:8000/api/v1`.
 
-### Start the app each time
+### Start the app
 
 In the **backend terminal**:
 
 ```powershell
-cd D:\ostad\TruthLayerBD\backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
-In the **frontend terminal**, while the backend stays running:
+In the **frontend terminal**:
 
 ```powershell
-cd D:\ostad\TruthLayerBD\frontend
 npm run dev
 ```
 
-Open **http://localhost:5173** in your browser. To check the backend separately, open **http://localhost:8000/api/v1/health**. Stop either server with `Ctrl+C` in its terminal. You only need to repeat the one-time setup after changing dependencies or recreating the environment.
+Open **http://localhost:5173**. If the frontend cannot connect, open **http://localhost:8000/api/v1/health** to check the backend. Its provider fields show whether keys are configured, not whether a provider is currently responding. Stop each server with `Ctrl+C`.
 
-On the first OCR run, EasyOCR downloads its Bangla/English model files into `backend/data/models/`. This can take several minutes. If the models are unavailable, the app keeps the image and asks for the main claim.
+On later runs, open terminals in `backend/` and `frontend/` and repeat only the two start commands. Restart the backend after changing `backend/.env`. Reinstall dependencies only when they change.
 
-### Upload to report
+**macOS/Linux:** use `python3 -m venv .venv`, `.venv/bin/python -m pip install -r requirements.txt`, `cp .env.example .env`, and `.venv/bin/python -m uvicorn app.main:app --reload --port 8000`. The frontend commands are the same, using `cp .env.example .env` for its environment file.
 
-The welcome page shows the official Ostad Presents YUNet AIgnite Buildathon 2026 sticker near the top. Use the **বাংলা | English** switch in the header to change interface language; বাংলা is the default, and the choice is remembered in this browser. Extracted claims, source titles, quotes, and citations remain in their original language. The same switch is available on the report and History pages, including mobile layouts. The offline fallback page follows the saved language and theme.
+## Use the app
 
-1. Open the welcome page and choose one JPEG, PNG, or WebP image (up to 8 MB). A caption is optional. Click **ছবি আপলোড করুন**.
-2. The progress page automatically reads the image, identifies the main claim, searches for sources, compares them, and builds a report. If the text or claim is unclear, enter the main claim once and click **দাবি দিয়ে যাচাই চালিয়ে যান**. The rest continues automatically. Refreshing during a server request waits for its saved result; if it stalls, use **আবার চেষ্টা করুন**.
-3. Read the short answer at the top of the report: **True**, **False**, or **Could not verify**, followed by one reason and a directly cited passage for a conclusive result. Mixed, weak, or unavailable evidence displays **Could not verify**. Open **সূত্র ও বিস্তারিত দেখুন / View evidence and details** for source cards, supported event and publisher details, search attempts, and limitations. Unsupported dates, prices, publisher findings, and image-origin claims are omitted. **দাবি ঠিক করে আবার যাচাই করুন** is available on the report; rerunning clears the old conclusion and evidence.
+Upload one image, up to **8 MB**, from the welcome page. Analysis starts automatically. If the correction screen appears, enter the main claim once and continue. The report shows a short answer and cited reason before the detailed evidence. You can edit the claim and rerun; the old verdict and citations are cleared first. History can reopen or delete saved reports. The language switch changes app-written text while extracted claims and source quotations stay in their original language.
 
-Gemini and Tavily keys stay on the backend. If a provider is unavailable or times out, the app offers manual claim correction or an honest partial report. A logo or page name is only a claimed publisher identity. The report separately checks whether a cited passage matching the claim appears on a known publisher's own domain, or whether that publisher explicitly denies an attributed image or post. Otherwise publisher identity remains unverified. Search results and these publisher findings do not establish image authenticity; a missing publisher result does not make the news claim false. Publisher checks currently use search excerpts, so readers should open the linked publisher page for stronger confirmation. History reopens or deletes analyses. Each browser receives a private, signed visitor cookie; reports and images are available only to that browser. Clearing its cookies or switching devices loses access to its online History. Previously saved offline copies on that device may still be present until browser storage is cleared.
+**True** requires relevant, direct support; **False** requires direct contradiction. **Could not verify** covers missing, mixed, weak, or unavailable evidence. Publisher identity and image authenticity stay unknown unless separately supported. The app cannot guarantee that every news image or claim can be verified.
 
-The report links each established event detail to its source in the expanded section. Event dates require a matching cited passage; search-supplied publication dates are labeled unverified. When a source contradicts the claim by describing a different event, the first screen shows the cited passage as the correction only if it directly supports that difference.
+## Test locally
 
-If a provider fails or relevant sources are unavailable, the report says **Could not verify** and explains why. Search counts and technical limitations are in the expanded section. **Search sources and verify again** retries the same claim; the previous verdict, publisher finding, dates, and evidence are cleared before the new search starts. Editing the claim also clears them before analysis resumes.
+From `backend/`:
 
-Analyses saved before visitor isolation have no owner mapping. They stay in SQLite but cannot be accessed through the public API. Back up the database before any manual cleanup; there is no safe way to assign these rows to an anonymous visitor automatically.
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
 
-### If configured providers still fail
+From `frontend/`:
 
-Check `/api/v1/health` to confirm the keys are configured, then run the backend from a normal PowerShell session with outbound HTTPS access. A backend launched inside a restricted test environment may be unable to open provider connections even when the keys are valid. Restart the backend after changing its environment. The app records `NETWORK_ERROR` for connection failures and keeps a partial report instead of inventing evidence. If the primary Gemini model is unavailable, the configured fallback is tried automatically; set `GEMINI_MODEL` in `backend/.env` to a model your account can access if the primary repeatedly returns an error. Never place provider keys in frontend settings.
+```powershell
+node --test tests/*.test.mjs
+npm run build
+```
 
-The production frontend includes an installable PWA manifest and service worker. Serve it over HTTPS (or localhost) for installation. Previously opened reports are kept locally, up to ten small snapshots, and can be reopened offline with their saved and source-retrieval times. The graph and source list show the same evidence IDs. New uploads, searches and verdicts require a connection. The offline copy omits the uploaded image and raw provider responses; it is replaced with the live report on reconnection.
+The cards in [`docs/manual-test-cases/`](docs/manual-test-cases/README.md) provide upload examples. The [28-card evaluation report](docs/manual-test-cases/EVIDENCE_FIRST_TEST_RUN_2026-11-05.md) separates live-provider findings from fixtures and records unresolved cases. Passing automated tests does not establish live news-verification accuracy.
 
-### Historical dataset matching
+## Deployment notes
 
-The analysis page can search locally imported historical claim and image records. Place reviewed JSONL metadata in `backend/data/datasets/`; use only records with permission to reuse their metadata and attribution. No real-world corpus is bundled. A related historical claim is shown with its original label and source, but does not change the current verdict. An original date or location is shown only for an exact image-file match with a reviewed provenance link. Cropped or recompressed copies will not match. To inspect the synthetic matching evaluation, run `.\.venv\Scripts\python.exe -m scripts.evaluate_dataset` from `backend/`.
+The root [`Dockerfile`](Dockerfile) builds the frontend and runs FastAPI on the host's `PORT`, serving both from one origin. Set `APP_ENV=production`, a unique `APP_SECRET_KEY` of at least 32 characters, and provider keys in the host's private environment settings. On Railway, mount persistent storage at `/app/backend/data` and set `DATABASE_URL=sqlite:////app/backend/data/truthlayer.db` and `UPLOAD_DIR=/app/backend/data/uploads`. SQLite, uploads, and OCR models need persistent storage. The production frontend uses `/api/v1` on its own origin.
 
-## Verification
-
-The five PNG cards in `docs/manual-test-cases/` cover the complete upload flow. Older saved verdicts made under previous evidence rules are rechecked when opened online; an old offline snapshot with a previous rule version is not presented as a current verdict.
-
-From `backend/`, run `.\.venv\Scripts\python.exe -m pytest`. This includes deterministic end-to-end tests using all five browser cards and synthetic provider responses. From `frontend/`, run `npm run build`, then `node --test tests/*.test.mjs`. Live verdicts depend on provider access and the sources returned at test time.
+Check the host's current memory, storage, and trial limits. EasyOCR can exceed a small free instance's memory or disk allowance. Trial storage is not a permanent archive. Test an actual upload on the public URL before sharing it.
