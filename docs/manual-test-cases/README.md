@@ -1,6 +1,8 @@
 # Browser test cases
 
-These four images are **test cards created for this project**, not real social posts. Upload one at a time at `http://localhost:5173`. The claims are intentionally simple so OCR errors and irrelevant search results are easy to spot. The cards themselves are not evidence.
+For the expanded, category-based phase-one evaluation set, see [CATEGORY_EVALUATION.md](CATEGORY_EVALUATION.md) and the 23 synthetic images in `category-cards/`.
+
+These five images are **test cards created for this project**, not real social posts. Upload one at a time at `http://localhost:5173`. The claims are intentionally simple so OCR errors and irrelevant search results are easy to spot. The cards themselves are not evidence.
 
 ## Before starting
 
@@ -15,6 +17,7 @@ These four images are **test cards created for this project**, not real social p
 | `02-sundarbans-1987-contradicted.png` | UNESCO listed the Sundarbans in Bangladesh as a World Heritage Site in 1987. | [UNESCO Bangladesh site 798](https://whc.unesco.org/en/list/798/); [UNESCO India site 452](https://whc.unesco.org/en/list/452/) | The Bangladesh listing is **1997**; 1987 belongs to the adjoining Indian site. The app must not treat the India result as support for the Bangladesh claim. |
 | `03-apollo-1972-contradicted.png` | Apollo 11 first landed humans on the Moon in 1972. | [NASA Apollo 11](https://www.nasa.gov/mission/apollo-11/) | NASA gives **20 July 1969**. If a relevant source is found, 1972 should not be accepted as supporting evidence. |
 | `04-untraceable-claim.png` | A blue whale was seen in Dhaka city lake on 12 February 2032. | No reference; deliberately untraceable future claim. | The app should say it lacks sufficient evidence. It must not invent a source or treat missing results as proof of the event. |
+| `05-eiffel-tower-berlin-contradicted.png` | The Eiffel Tower is in Berlin, Germany. | [Official Eiffel Tower access page](https://www.toureiffel.paris/en/access-map) | The original monument is in Paris, France. Berlin replicas and the Berlin TV Tower are different subjects and must not be treated as evidence for the original landmark. |
 
 **Verdict labels are not guaranteed.** Live search may return no suitable source, providers may be disabled, and the app compares search snippets rather than full articles. `insufficient_evidence` is acceptable for any case when retrieval fails or the sources do not establish the claim. For the last case, a future date may be flagged separately; that is also acceptable if the app still avoids an invented factual verdict.
 
@@ -25,11 +28,11 @@ These four images are **test cards created for this project**, not real social p
 - **History:** Complete a report, visit History, reopen it, and check the image, claim, evidence links, and decision are preserved.
 - **Offline:** Open a completed report online, switch the browser offline, then reopen it from History. It should show a dated cached report; new searches and uploads should not run offline.
 - **Delete:** Delete only a test analysis, then check that it disappears from History. Do not use a real upload for this check.
-- **Upload validation:** Try a text file and an image larger than 8 MB. The form should reject each with a useful message. Do not use the four cards for this check; they are valid PNGs.
+- **Upload validation:** Try a text file and an image larger than 8 MB. The form should reject each with a useful message. Do not use the five cards for this check; they are valid PNGs.
 - **Refresh during processing:** Refresh while a provider request is running. The page should wait for the saved server result, then continue; it must not show an old report as the new conclusion. If a request stalls, use the retry action.
 - **Provider failure:** With a key absent or a provider unavailable, the app should request one claim correction or show a partial/insufficient report with a limitation. It must not invent a citation.
 - **Mobile:** At about 390 px viewport width, check upload, the correction box, buttons, evidence cards, history, and report without horizontal scrolling.
 
 Record for each case: OCR text, confirmed claim, number of relevant sources, source URLs, final label, layer statuses, provider configuration, and any error. “Unknown” source/context/media layers can be correct even when a claim is supported, because a text test card does not prove publisher identity or image provenance.
 
-The automated `backend/tests/test_end_to_end_cards.py` suite runs these four images through the API with clearly synthetic source fixtures. It checks the expected supported, contradicted, and insufficient paths without claiming that provider responses are stable. A live browser run can legitimately end with insufficient evidence when current search fails or returns no relevant source.
+The automated `backend/tests/test_end_to_end_cards.py` suite runs these five images through the API with clearly synthetic source fixtures. It checks the expected supported, contradicted, and insufficient paths without claiming that provider responses are stable. A live browser run can legitimately end with insufficient evidence when current search fails or returns no relevant source.

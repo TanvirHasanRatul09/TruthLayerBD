@@ -10,8 +10,8 @@ import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-async function bundled(relativePath, apiBase = 'http://localhost:8000/api/v1') {
-  const result = await build({ entryPoints: [path.join(root, relativePath)], bundle: true, platform: 'node', format: 'cjs', packages: 'external', write: false, jsx: 'automatic', define: { 'import.meta.env.VITE_API_BASE_URL': JSON.stringify(apiBase) } })
+async function bundled(relativePath, apiBase = 'http://localhost:8000/api/v1', production = false) {
+  const result = await build({ entryPoints: [path.join(root, relativePath)], bundle: true, platform: 'node', format: 'cjs', packages: 'external', write: false, jsx: 'automatic', define: { 'import.meta.env.VITE_API_BASE_URL': JSON.stringify(apiBase), 'import.meta.env.PROD': JSON.stringify(production) } })
   const module = new Module(path.join(root, 'tests', 'phase11-compiled.cjs'))
   module.filename = path.join(root, 'tests', 'phase11-compiled.cjs')
   module.paths = Module._nodeModulePaths(path.join(root, 'tests'))
@@ -27,7 +27,7 @@ function analysis(id) {
   return {
     analysis_id: id, image_url: '/private-image', extraction: { claim: 'সব বিশ্ববিদ্যালয় বন্ধ' },
     retrieval: { retrieved_at: '2026-11-02T10:00:00Z' }, limitations: ['Only titles were checked'],
-    verification: { label: 'unverified', evidence_coverage: 'low', summary: 'Unknown', reasons: [], comparison_method: 'none', fallbacks_used: [], limitations: [], flags: [], layers: { claim: { status: 'unverified', summary: 'Unknown' }, source: { status: 'inconclusive', summary: 'Unknown' }, context: { status: 'inconclusive', summary: 'Unknown' }, media: { status: 'inconclusive', summary: 'Unknown' } } },
+    verification: { label: 'unverified', evidence_coverage: 'low', summary: 'Unknown', decision_method: 'python_evidence_fusion_v9', reasons: [], comparison_method: 'none', fallbacks_used: [], limitations: [], flags: [], layers: { claim: { status: 'unverified', summary: 'Unknown' }, source: { status: 'inconclusive', summary: 'Unknown' }, context: { status: 'inconclusive', summary: 'Unknown' }, media: { status: 'inconclusive', summary: 'Unknown' } } },
     evidence: [{ evidence_id: 'ev_1', title: 'একটি সূত্র', url: 'https://example.org/a', domain: 'example.org', source_type: 'other', stance: 'mentions_but_unclear', published_at: null, retrieved_at: '2026-11-02T10:00:00Z', snippet: 'private provider response', quote: 'private quote' }],
   }
 }
@@ -42,6 +42,17 @@ test('bounded cache keeps derived report metadata and removes deleted reports', 
   assert.doesNotMatch(JSON.stringify(reports), /private-image|private provider response|private quote/)
   cache.removeCachedReport('an_11')
   assert.equal(cache.getCachedReport('an_11'), null)
+})
+
+test('offline report keeps only cited excerpts needed for the short answer', async () => {
+  const cache = await bundled('src/pwa/reportCache.ts')
+  const report = analysis('an_cited')
+  report.verification.reasons = [{ evidence_id: 'ev_1', url: 'https://example.org/a', stance: 'contradicts', summary: 'Cited location.' }]
+  report.evidence[0].quote = 'The monument is in Paris.'
+  cache.saveCachedReport(report)
+  const saved = cache.getCachedReport('an_cited')
+  assert.equal(saved.evidence[0].quote, 'The monument is in Paris.')
+  assert.doesNotMatch(JSON.stringify(saved), /private provider response/)
 })
 
 test('graph and cached text list show the same evidence IDs', async () => {
@@ -78,7 +89,7 @@ test('offline state stops uploads and new searches before a network request', as
 
 test('one-origin deployment resolves uploaded images from a relative API base', async () => {
   globalThis.window = { location: { origin: 'https://demo.example' } }
-  const api = await bundled('src/api/truthlayer.ts', '/api/v1')
+  const api = await bundled('src/api/truthlayer.ts', 'http://localhost:8000/api/v1', true)
   assert.equal(api.imageUrl('/api/v1/analyses/an_test/image'), 'https://demo.example/api/v1/analyses/an_test/image')
 })
 

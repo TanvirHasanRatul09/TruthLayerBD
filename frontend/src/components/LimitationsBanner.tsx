@@ -1,3 +1,5 @@
+import { useI18n } from '../i18n'
+
 const translations: Record<string, string> = {
   'Live web retrieval is unavailable because Tavily is not configured.': 'লাইভ ওয়েব অনুসন্ধান পাওয়া যাচ্ছে না: Tavily কনফিগার করা নেই।',
   'Live web retrieval failed; no current evidence was obtained.': 'লাইভ ওয়েব অনুসন্ধান ব্যর্থ হয়েছে; বর্তমান কোনো সূত্র পাওয়া যায়নি।',
@@ -17,7 +19,8 @@ const translations: Record<string, string> = {
 }
 
 export default function LimitationsBanner({ limitations, fallbacks = [] }: { limitations: string[]; fallbacks?: string[] }) {
+  const { language, tr } = useI18n()
   const items = [...new Set([...limitations, ...fallbacks])]
   if (!items.length) return null
-  return <aside className="notice" aria-label="সীমাবদ্ধতা"><h3>যা জানা যায়নি</h3><ul>{items.map(item => <li key={item}>{translations[item] || item}</li>)}</ul></aside>
+  return <aside className="notice" aria-label={tr('সীমাবদ্ধতা', 'Limitations')}><h3>{tr('যা জানা যায়নি', 'What remains unknown')}</h3><ul>{items.map(item => <li key={item}>{language === 'bn' ? translations[item] || item : item}</li>)}</ul></aside>
 }

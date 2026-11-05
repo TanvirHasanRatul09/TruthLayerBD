@@ -96,14 +96,14 @@ def to_read(analysis: Analysis, session: Session) -> AnalysisRead:
     verification = session.get(VerificationRecord, analysis.id)
     extraction_value = ClaimExtraction.model_validate_json(extraction.data_json) if extraction else None
     verification_value = VerificationRead.model_validate_json(verification.data_json) if verification else None
-    stale_report = verification_value is not None and verification_value.decision_method != "python_evidence_fusion_v3"
+    stale_report = verification_value is not None and verification_value.decision_method != "python_evidence_fusion_v9"
     if stale_report:
         verification_value = None
     comparison_rows = {} if stale_report else {row.evidence_id: row for row in session.exec(select(ComparisonRecord).where(ComparisonRecord.analysis_id == analysis.id)).all()}
     evidence = session.exec(select(Evidence).where(Evidence.analysis_id == analysis.id).order_by(Evidence.source_rank, Evidence.domain, Evidence.canonical_url)).all()
     unfiltered_count = len(evidence)
     if extraction_value and extraction_value.claim:
-        evidence = [item for item in evidence if tavily_service.is_relevant_result(item.title, item.snippet, extraction_value)]
+        evidence = [item for item in evidence if tavily_service.is_relevant_result(item.title, item.snippet, extraction_value, item.url)]
     irrelevant_note = ["Unrelated search results were excluded; no claim-specific source was found. Correct the claim if needed, then search again."] if unfiltered_count and not evidence else (["Some unrelated search results were excluded."] if len(evidence) < unfiltered_count else [])
     dataset_matches = session.exec(select(DatasetMatch).where(DatasetMatch.analysis_id == analysis.id).order_by(DatasetMatch.similarity.desc())).all()
     documented_image = next((item for item in dataset_matches if item.match_type == "exact_image" and item.provenance_url), None)
@@ -325,6 +325,8 @@ async def retrieve_evidence(analysis_id: str, owner_id: str = Depends(visitor_id
     extraction = ClaimExtraction.model_validate_json(extraction_record.data_json)
     if extraction.needs_user_confirmation or not extraction.claim:
         raise HTTPException(status_code=409, detail="Confirm the main claim before search.")
+    # A retry must invalidate the prior conclusion before a slow provider call.
+    clear_retrieval(analysis_id, session)
     analysis.status = "processing"
     session.add(analysis)
     session.commit()
@@ -400,7 +402,7 @@ async def verify_evidence(analysis_id: str, owner_id: str = Depends(visitor_id),
     claim = ClaimExtraction.model_validate_json(extraction.data_json)
     if claim.needs_user_confirmation or not claim.claim:
         raise HTTPException(status_code=409, detail="Confirm the main claim before verification.")
-    items = [item for item in session.exec(select(Evidence).where(Evidence.analysis_id == analysis_id).order_by(Evidence.source_rank, Evidence.domain)).all() if tavily_service.is_relevant_result(item.title, item.snippet, claim)]
+    items = [item for item in session.exec(select(Evidence).where(Evidence.analysis_id == analysis_id).order_by(Evidence.source_rank, Evidence.domain)).all() if tavily_service.is_relevant_result(item.title, item.snippet, claim, item.url)]
     for item in items:
         item.source_type, item.source_rank = tavily_service._source_type(item.domain, claim.claimed_source, claim.claim)
         session.add(item)

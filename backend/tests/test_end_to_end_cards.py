@@ -22,6 +22,7 @@ CLAIMS = {
     "02-sundarbans-1987-contradicted.png": "UNESCO listed the Sundarbans in Bangladesh as a World Heritage Site in 1987.",
     "03-apollo-1972-contradicted.png": "Apollo 11 first landed humans on the Moon in 1972.",
     "04-untraceable-claim.png": "A blue whale was seen in Dhaka city lake on 12 February 2032.",
+    "05-eiffel-tower-berlin-contradicted.png": "The Eiffel Tower is in Berlin, Germany.",
 }
 
 
@@ -57,6 +58,8 @@ def card_client(monkeypatch):
             text = "UNESCO listed the Sundarbans in Bangladesh as a World Heritage Site in 1997."
         elif "1987" in claim:
             text = "UNESCO listed the Sundarbans in Bangladesh as a World Heritage Site in 1997, not 1987."
+        elif "Eiffel Tower" in claim:
+            text = "The Eiffel Tower is located in Paris, France, not Berlin, Germany."
         else:
             text = "Apollo 11 first landed humans on the Moon in 1969, not 1972."
         now = datetime.now(timezone.utc)
@@ -72,6 +75,13 @@ def card_client(monkeypatch):
                 evidence_id="ev_india", url="https://india.example/synthetic", canonical_url="https://india.example/synthetic",
                 title="Sundarbans National Park India UNESCO 1987", domain="india.example", source_type="other", source_rank=4,
                 snippet="India's Sundarbans World Heritage Site was listed in 1987 by UNESCO.",
+                published_at=now, retrieved_at=now, query=claim,
+            ))
+        if "Eiffel Tower" in claim:
+            items.append(tavily_service.EvidenceItem(
+                evidence_id="ev_replica", url="https://replica.example/berlin", canonical_url="https://replica.example/berlin",
+                title="Berlin TV Tower and an Eiffel Tower replica", domain="replica.example", source_type="other", source_rank=4,
+                snippet="A small replica of the Eiffel Tower stands in Berlin, Germany.",
                 published_at=now, retrieved_at=now, query=claim,
             ))
         return tavily_service.RetrievalOutcome(items=items, status="completed", query_count=1, successful_queries=1)
@@ -102,6 +112,7 @@ def card_client(monkeypatch):
     ("02-sundarbans-1987-contradicted.png", "contradicted"),
     ("03-apollo-1972-contradicted.png", "contradicted"),
     ("04-untraceable-claim.png", "insufficient_evidence"),
+    ("05-eiffel-tower-berlin-contradicted.png", "contradicted"),
 ])
 def test_card_upload_to_saved_report(card_client, name, expected):
     response = card_client.post("/api/v1/analyses", files={"file": (name, (CARDS / name).read_bytes(), "image/png")})
@@ -124,15 +135,54 @@ def test_card_upload_to_saved_report(card_client, name, expected):
     assert all(item["url"].startswith("https://") for item in report["evidence"])
     if name.startswith("02"):
         assert not any(item["evidence_id"] == "ev_india" for item in report["evidence"])
+    if name.startswith("05"):
+        assert not any(item["evidence_id"] == "ev_replica" for item in report["evidence"])
     if expected == "insufficient_evidence":
         assert report["verification"]["reasons"] == []
         assert report["verification"]["event_details"]["what"] is None
     else:
         assert report["verification"]["reasons"]
+    if expected == "contradicted":
+        assert report["verification"]["related_event"]["url"].startswith("https://")
+        assert report["verification"]["event_details"]["what"] is None
     assert card_client.get(f"/api/v1/analyses/{analysis_id}").json()["verification"]["label"] == expected
     assert any(item["analysis_id"] == analysis_id for item in card_client.get("/api/v1/analyses").json()["items"])
     assert card_client.delete(f"/api/v1/analyses/{analysis_id}").status_code == 204
     assert card_client.get(f"/api/v1/analyses/{analysis_id}").status_code == 404
+
+
+def test_card_with_two_credible_sides_stays_conflicting(card_client, monkeypatch):
+    name = "05-eiffel-tower-berlin-contradicted.png"
+    claim = CLAIMS[name]
+    created = card_client.post("/api/v1/analyses", files={"file": (name, (CARDS / name).read_bytes(), "image/png")})
+    analysis_id = created.json()["analysis_id"]
+    assert card_client.patch(f"/api/v1/analyses/{analysis_id}/ocr", json={"text": claim}).status_code == 200
+    assert card_client.post(f"/api/v1/analyses/{analysis_id}/run", json={"claim": claim}).status_code == 200
+
+    def mixed_retrieve(_extraction, _analysis_id, _settings):
+        now = datetime.now(timezone.utc)
+        passages = (
+            ("ev_for", "source-a.example", "The Eiffel Tower is in Berlin, Germany."),
+            ("ev_against", "source-b.example", "The Eiffel Tower is in Paris, France, not Berlin, Germany."),
+        )
+        items = [tavily_service.EvidenceItem(
+            evidence_id=evidence_id, url=f"https://{domain}/location", canonical_url=f"https://{domain}/location",
+            title=passage, domain=domain, source_type="independent_news" if evidence_id == "ev_for" else "fact_check", source_rank=2,
+            snippet=passage + " This detailed synthetic excerpt is only for testing conflicting citations and does not describe a real publication. " * 2,
+            published_at=now, retrieved_at=now, query=claim,
+        ) for evidence_id, domain, passage in passages]
+        return tavily_service.RetrievalOutcome(items=items, status="completed", query_count=1, successful_queries=1)
+
+    def mixed_compare(_claim, items, _settings):
+        rows = [EvidenceComparison(evidence_id=item.id, stance="supports" if item.id == "ev_for" else "contradicts", relevance=1, reason="Synthetic passage states a location.", quote=item.title, method="gemini") for item in items]
+        return ComparisonOutcome(comparisons=rows, method="gemini")
+
+    monkeypatch.setattr(tavily_service, "retrieve", mixed_retrieve)
+    monkeypatch.setattr(comparison_service, "compare", mixed_compare)
+    assert card_client.post(f"/api/v1/analyses/{analysis_id}/retrieve").status_code == 200
+    report = card_client.post(f"/api/v1/analyses/{analysis_id}/verify").json()
+    assert report["verification"]["label"] == "conflicting"
+    assert {reason["evidence_id"] for reason in report["verification"]["reasons"]} == {"ev_for", "ev_against"}
 
 
 def test_refresh_can_read_saved_processing_state(card_client, monkeypatch):

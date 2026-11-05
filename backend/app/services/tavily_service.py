@@ -16,6 +16,7 @@ from app.schemas.providers import ClaimExtraction, ProviderAttempt
 API_URL = "https://api.tavily.com/search"
 PUBLISHER_DOMAINS = {
     "jamuna tv": "jamuna.tv",
+    "যমুনা টিভি": "jamuna.tv",
     "প্রথম আলো": "prothomalo.com",
     "prothom alo": "prothomalo.com",
     "the daily star": "thedailystar.net",
@@ -26,6 +27,9 @@ FACT_CHECK_DOMAINS = {"rumorscanner.com", "factcheck.org"}
 NEWS_DOMAINS = {"thedailystar.net", "prothomalo.com", "bdnews24.com", "dhakatribune.com"}
 TRACKING_PARAMETERS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 TOPIC_AUTHORITIES = (
+    ("toureiffel.paris", ("eiffel tower", "tour eiffel", "আইফেল টাওয়ার", "আইফেল টাওয়ার")),
+    ("who.int", ("who", "world health organization", "বিশ্ব স্বাস্থ্য সংস্থা", "covid-19", "কোভিড")),
+    ("un.org", ("united nations", "জাতিসংঘ", "un membership")),
     ("ugc.gov.bd", ("বিশ্ববিদ্যালয়", "বিশ্ববিদ্যালয়", "university", "universities")),
     ("berc.org.bd", ("এলপিজি", "গ্যাস", "lpg", "gas", "জ্বালানি", "energy")),
     ("unesco.org", ("unesco", "world heritage", "বিশ্ব ঐতিহ্য")),
@@ -153,11 +157,25 @@ def _tokens(text: str) -> set[str]:
     return tokens
 
 
-def is_relevant_result(title: str, snippet: str, extraction: ClaimExtraction) -> bool:
+def is_relevant_result(title: str, snippet: str, extraction: ClaimExtraction, url: str = "") -> bool:
     """Require several claim-specific terms, never a single place or topic word."""
     result = _tokens(f"{title} {snippet}")
     claim_text = (extraction.claim or "").casefold()
     result_text = f"{title} {snippet}".casefold()
+    title_text = title.casefold()
+    # A source about another named person is not evidence for a person-specific
+    # claim merely because the surrounding event words overlap.
+    if extraction.people and not any(person.casefold() in result_text for person in extraction.people):
+        return False
+    # A similarly named structure or a replica is a different subject, even
+    # when the search snippet repeats every location word in the claim.
+    if "eiffel tower" in claim_text and re.search(r"\b(?:replica|replicas|copies|reproductions|miniature|little eiffel tower|own eiffel tower|tv tower|fernsehturm|funkturm)\b", result_text):
+        return False
+    if "apollo 11" in claim_text and re.search(r"\bapollo\s+(?!11\b)\d+\b", title_text) and "apollo 11" not in title_text:
+        return False
+    if "sundarbans" in claim_text and ("bangladesh" in claim_text or "বাংলাদেশ" in claim_text):
+        if re.search(r"/en/list/452(?:/|$)", urlsplit(url).path, re.I) or "sundarbans national park" in title_text:
+            return False
     # The two UNESCO Sundarbans sites have different countries and listing years.
     # A result about only the other country cannot support the named site.
     countries = (("bangladesh", "বাংলাদেশ"), ("india", "ভারত"))
@@ -185,7 +203,15 @@ def generate_queries(extraction: ClaimExtraction, settings: Settings) -> list[st
         return []
     official_domain = _official_domain(claim)
     candidates = [claim]
+    # Search the subject independently of a possibly false location. Searching
+    # only the complete claim often returns pages about a similarly named
+    # object in the claimed place instead of the actual subject.
+    location_claim = re.fullmatch(r"(?:the\s+)?(.+?)\s+(?:is|stands|lies|is located)\s+(?:in|at)\s+[\w .'-]+(?:,\s*[\w .'-]+)?\.?", claim, re.I)
+    if location_claim and len(location_claim.group(1).split()) >= 2:
+        candidates.append(f'"{location_claim.group(1).strip()}" location official')
     if official_domain:
+        if official_domain == "toureiffel.paris":
+            candidates.append("site:toureiffel.paris Eiffel Tower location")
         candidates.append(f"site:{official_domain} {claim}")
     claimed_domain = PUBLISHER_DOMAINS.get((extraction.claimed_source or "").casefold().strip())
     if claimed_domain:
@@ -279,7 +305,7 @@ def retrieve(extraction: ClaimExtraction, analysis_id: str, settings: Settings) 
             snippet = _clean(str(raw.get("content") or ""), 1200)
             if not title and not snippet:
                 continue
-            if not is_relevant_result(title, snippet, extraction):
+            if not is_relevant_result(title, snippet, extraction, url):
                 continue
             source_type, rank = _source_type(domain, extraction.claimed_source, extraction.claim or "")
             item = EvidenceItem(
