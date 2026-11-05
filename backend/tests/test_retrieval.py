@@ -47,6 +47,30 @@ def test_sundarbans_other_country_result_is_not_relevant():
     assert tavily_service.is_relevant_result("Sundarbans Bangladesh UNESCO", "UNESCO listed the Sundarbans in Bangladesh as a World Heritage Site in 1997, not 1987.", claim)
 
 
+def test_similarly_named_structures_and_wrong_country_site_are_excluded():
+    tower = ClaimExtraction(claim="The Eiffel Tower is in Berlin, Germany.")
+    assert not tavily_service.is_relevant_result("Berlin TV Tower | Fun Facts", "The Berlin TV Tower was planned to surpass the Eiffel Tower in Paris.", tower)
+    assert not tavily_service.is_relevant_result("Copies and replicas of the Eiffel Tower in Germany", "A small Eiffel Tower replica stands in Berlin.", tower)
+    assert tavily_service.is_relevant_result("Access to the Eiffel Tower", "The Eiffel Tower is located in Paris, France, with an address at 5 avenue Anatole France.", tower, "https://toureiffel.paris/en/access-map")
+    sundarbans = ClaimExtraction(claim="UNESCO listed the Sundarbans in Bangladesh in 1987.")
+    assert not tavily_service.is_relevant_result("The Sundarbans", "India's 1987 Sundarbans site borders Bangladesh.", sundarbans, "https://whc.unesco.org/en/list/452/")
+    assert tavily_service.is_relevant_result("The Sundarbans", "The Sundarbans in Bangladesh was listed by UNESCO in 1997.", sundarbans, "https://whc.unesco.org/en/list/798/")
+    apollo = ClaimExtraction(claim="Apollo 11 first landed humans on the Moon in 1972.")
+    assert not tavily_service.is_relevant_result("Apollo 17 in 1972", "The final Apollo Moon landing followed Apollo 11.", apollo)
+
+
+def test_location_search_checks_subject_without_repeating_disputed_city():
+    claim = ClaimExtraction(claim="The National Museum is in Berlin, Germany.")
+    queries = tavily_service.generate_queries(claim, Settings(max_search_queries=5))
+    assert any('National Museum' in query and 'Berlin' not in query for query in queries)
+
+
+def test_person_specific_result_requires_same_named_person():
+    claim = ClaimExtraction(claim="John Smith won the mayoral election in Dhaka in 2024.", people=["John Smith"])
+    assert not tavily_service.is_relevant_result("John Doe wins mayoral election", "John Doe won the mayoral election in Dhaka in 2024.", claim)
+    assert tavily_service.is_relevant_result("John Smith mayoral election", "John Smith won the mayoral election in Dhaka in 2023, not 2024.", claim)
+
+
 def test_retrieval_discards_unrelated_country_results(monkeypatch):
     claim = ClaimExtraction(claim="ভিসা জটিলতা কাটিয়ে উজবেকিস্তানের পথে টিটি তারকা হৃদয়")
     search, _ = fake_search([([
@@ -93,12 +117,24 @@ def test_query_generation_is_bounded_and_focused():
 def test_official_authority_requires_topic_match():
     assert tavily_service._source_type("teachers.gov.bd", None, "১২ কেজি এলপিজি গ্যাসের নতুন দাম") == ("government_site", 4)
     assert tavily_service._source_type("ugc.gov.bd", None, "সব বিশ্ববিদ্যালয় বন্ধ") == ("official_authority", 0)
+
+
+def test_eiffel_tower_search_includes_its_official_site():
+    claim = ClaimExtraction(claim="The Eiffel Tower is in Berlin, Germany.")
+    queries = tavily_service.generate_queries(claim, Settings())
+    assert "site:toureiffel.paris Eiffel Tower location" in queries
+    assert any(query.startswith("site:toureiffel.paris ") for query in queries)
+    assert tavily_service._source_type("toureiffel.paris", None, claim.claim) == ("official_authority", 0)
+    assert tavily_service._source_type("berlin-tickets.com", None, claim.claim) == ("other", 4)
     assert tavily_service._source_type("berc.org.bd", None, "এলপিজির নতুন দাম") == ("official_authority", 0)
     queries = tavily_service.generate_queries(ClaimExtraction(claim="এলপিজির নতুন দাম"), Settings())
     assert any(query.startswith("site:berc.org.bd") for query in queries)
     assert tavily_service._source_type("whc.unesco.org", None, "UNESCO listed the Sundarbans") == ("official_authority", 0)
     assert tavily_service._source_type("nasa.gov", None, "Apollo 11 landed on the Moon") == ("official_authority", 0)
     assert tavily_service._source_type("nasa.gov", None, "University closure in Bangladesh") != ("official_authority", 0)
+    assert tavily_service._source_type("who.int", None, "WHO characterized COVID-19 as a pandemic") == ("official_authority", 0)
+    assert tavily_service._source_type("un.org", None, "বাংলাদেশ জাতিসংঘের সদস্য হয়") == ("official_authority", 0)
+    assert tavily_service._source_type("who.int", None, "UNESCO listed the Sundarbans") != ("official_authority", 0)
 
 
 def test_tavily_request_disables_generated_answer_and_caps_results(monkeypatch):
@@ -332,7 +368,7 @@ def test_verify_persists_traceable_report_and_clears_stale_verdict(client, monke
     with Session(get_engine(settings.database_url)) as session:
         saved = session.get(VerificationRecord, analysis_id)
         old_report = json.loads(saved.data_json)
-        old_report["decision_method"] = "python_evidence_fusion_v1"
+        old_report["decision_method"] = "python_evidence_fusion_v7"
         saved.data_json = json.dumps(old_report)
         session.add(saved)
         session.commit()
@@ -382,3 +418,39 @@ def test_claim_rerun_clears_previous_report_before_slow_extraction_finishes(clie
     fresh = client.get(f"/api/v1/analyses/{analysis_id}").json()
     assert fresh["extraction"]["claim"] == "নতুন দাবি"
     assert fresh["evidence"] == [] and fresh["verification"] is None
+
+
+def test_search_retry_clears_old_report_before_slow_provider_finishes(client, monkeypatch):
+    analysis_id = ready_analysis(client)
+    settings = get_settings()
+    settings.tavily_api_key = "test-key"
+    search, _ = fake_search([([result("https://ugc.gov.bd/notice/42", "Official notice", "The claim is discussed in an official notice")], None, 200)])
+    monkeypatch.setattr(tavily_service, "_search", search)
+    assert client.post(f"/api/v1/analyses/{analysis_id}/retrieve").status_code == 200
+    assert client.post(f"/api/v1/analyses/{analysis_id}/verify").status_code == 200
+    assert client.get(f"/api/v1/analyses/{analysis_id}").json()["verification"] is not None
+
+    entered, release = Event(), Event()
+
+    def slow_retrieve(*_args):
+        entered.set()
+        assert release.wait(10)
+        return tavily_service.RetrievalOutcome(status="unavailable", query_count=1, successful_queries=0, limitation="Search timed out.")
+
+    monkeypatch.setattr(tavily_service, "retrieve", slow_retrieve)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(client.post, f"/api/v1/analyses/{analysis_id}/retrieve")
+        try:
+            assert entered.wait(5)
+            pending = client.get(f"/api/v1/analyses/{analysis_id}").json()
+            assert pending["status"] == "processing"
+            assert pending["extraction"] is not None
+            assert pending["retrieval"] is None
+            assert pending["evidence"] == []
+            assert pending["verification"] is None
+        finally:
+            release.set()
+        assert future.result(timeout=10).status_code == 200
+    after = client.get(f"/api/v1/analyses/{analysis_id}").json()
+    assert after["retrieval"]["status"] == "unavailable"
+    assert after["evidence"] == [] and after["verification"] is None

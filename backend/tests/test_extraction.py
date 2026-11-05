@@ -57,7 +57,7 @@ def test_valid_output_and_missing_fields_are_bounded():
     assert result.claimed_source == "Jamuna TV"
     assert result.event_date is None
     missing = gemini_service.validate_extraction('{"claim":"সব বিশ্ববিদ্যালয় বন্ধ"}', source, 5)
-    assert missing.claimed_source is None
+    assert missing.claimed_source == "jamuna tv"
     assert missing.people == []
     assert missing.search_queries_bn == []
 
@@ -72,6 +72,12 @@ def test_invented_source_and_date_are_removed():
     assert result.needs_user_confirmation is True
     with pytest.raises(ValueError):
         gemini_service.validate_extraction(valid_extraction(claim="অন্য একটি অপ্রাসঙ্গিক খবর"), source, 5)
+
+
+def test_manual_rerun_retains_visible_publisher_without_authenticating_it():
+    result = gemini_service.manual_extraction("Jamuna TV: A bridge opened in Dhaka today", "A bridge opened in Dhaka today")
+    assert result.claimed_source == "jamuna tv"
+    assert gemini_service.manual_extraction("A bridge opened in Dhaka today", "A bridge opened in Dhaka today").claimed_source is None
 
 
 def test_normalized_date_must_be_visible_in_input():
@@ -99,6 +105,20 @@ def test_primary_429_uses_fallback_model(monkeypatch):
     assert outcome.method == "fallback"
     assert calls[0] == ("primary", "access_check")
     assert calls[-1] == ("fallback", "extract_claim")
+
+
+def test_transient_server_error_retries_once(monkeypatch):
+    post, calls = fake_post([(None, 500), ('{"ok": true}', 200), (valid_extraction(), 200)])
+    def with_server_code(*args):
+        output, event = post(*args)
+        if event.status_code == 500:
+            event.error_code = "SERVER_ERROR"
+        return output, event
+    monkeypatch.setattr(gemini_service, "_post", with_server_code)
+    monkeypatch.setattr(gemini_service.time, "sleep", lambda seconds: None)
+    outcome = gemini_service.extract_claim("Jamuna TV আগামীকাল সব বিশ্ববিদ্যালয় বন্ধ", None, settings_with_key())
+    assert outcome.method == "primary"
+    assert calls[:2] == [("primary", "access_check"), ("primary", "access_check")]
 
 
 def test_timeout_or_denial_preserves_manual_path(monkeypatch):

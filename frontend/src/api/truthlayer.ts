@@ -30,6 +30,13 @@ export type ClaimExtraction = {
   ambiguities: string[]
 }
 
+export type PublisherFinding = {
+  status: 'confirmed_published' | 'confirmed_misattributed' | 'unverified'
+  claimed_name: string | null
+  scope: 'claim' | 'image' | null
+  evidence: { value: string; evidence_id: string; url: string } | null
+}
+
 export type AnalysisRead = {
   analysis_id: string
   created_at: string
@@ -67,12 +74,15 @@ export type VerificationResult = {
   flags: string[]
   evidence_coverage: 'low' | 'medium' | 'high'
   summary: string
+  decision_method?: string
   reasons: { evidence_id: string; url: string; stance: string; summary: string }[]
   comparison_method: string
   fallbacks_used: string[]
   limitations: string[]
   layers: Record<string, { status: string; summary: string }>
   event_details?: Record<'what' | 'when' | 'where' | 'reported_by', { value: string; evidence_id: string; url: string } | null>
+  related_event?: { value: string; evidence_id: string; url: string } | null
+  publisher?: PublisherFinding
 }
 
 export type RetrievalResult = {
@@ -102,7 +112,7 @@ export type EvidenceResult = {
 
 export type AnalysisList = { items: AnalysisRead[]; total: number; limit: number; offset: number }
 
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+const apiBaseUrl = import.meta.env.PROD ? '/api/v1' : (import.meta.env.VITE_API_BASE_URL || '/api/v1')
 const requireOnline = () => { if (!navigator.onLine) throw new Error('ইন্টারনেট সংযোগ নেই। সংযোগ ফিরে এলে আবার চেষ্টা করুন।') }
 const apiFetch = (url: string, options: RequestInit = {}) => fetch(url, { ...options, credentials: 'include' })
 
@@ -155,6 +165,7 @@ export function retryOcrWithVision(analysisId: string): Promise<AnalysisRead> {
 
 export async function runExtraction(analysisId: string, claim?: string): Promise<AnalysisRead> {
   requireOnline()
+  if (claim !== undefined) removeCachedReport(analysisId)
   const response = await apiFetch(`${apiBaseUrl}/analyses/${analysisId}/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -170,6 +181,7 @@ export async function runExtraction(analysisId: string, claim?: string): Promise
 
 export async function retrieveEvidence(analysisId: string): Promise<AnalysisRead> {
   requireOnline()
+  removeCachedReport(analysisId)
   const response = await apiFetch(`${apiBaseUrl}/analyses/${analysisId}/retrieve`, { method: 'POST' })
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
@@ -192,7 +204,7 @@ export function getAnalysis(analysisId: string): Promise<AnalysisRead> {
 }
 
 export function listAnalyses(limit = 20, offset = 0): Promise<AnalysisList> {
-  return apiFetch(`${apiBaseUrl}/analyses?limit=${limit}&offset=${offset}`).then(readResponse<AnalysisList>).then(page => { page.items.forEach(item => { if (item.verification && item.status !== 'processing' && item.status !== 'failed') saveCachedReport(item) }); return page })
+  return apiFetch(`${apiBaseUrl}/analyses?limit=${limit}&offset=${offset}`).then(readResponse<AnalysisList>).then(page => { page.items.forEach(item => { if (item.verification && item.status !== 'processing' && item.status !== 'failed') saveCachedReport(item); else removeCachedReport(item.analysis_id) }); return page })
 }
 
 export function verifyAnalysis(analysisId: string): Promise<AnalysisRead> {

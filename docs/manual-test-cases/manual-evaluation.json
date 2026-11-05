@@ -1,0 +1,7 @@
+[
+  {"id":"M01","file":"01-sundarbans-1997-supported.png","difficulty":"easy","language":"en","claim":"UNESCO listed the Sundarbans in Bangladesh as a World Heritage Site in 1997.","categories":["event","date","place"],"expected_claim":"supported","reference":"https://whc.unesco.org/en/list/798/"},
+  {"id":"M02","file":"02-sundarbans-1987-contradicted.png","difficulty":"hard","language":"en","claim":"UNESCO listed the Sundarbans in Bangladesh as a World Heritage Site in 1987.","categories":["event","date","place","miscontext"],"expected_claim":"contradicted","reference":"https://whc.unesco.org/en/list/798/","related_reference":"https://whc.unesco.org/en/list/452/"},
+  {"id":"M03","file":"03-apollo-1972-contradicted.png","difficulty":"medium","language":"en","claim":"Apollo 11 first landed humans on the Moon in 1972.","categories":["event","date"],"expected_claim":"contradicted","reference":"https://www.nasa.gov/mission/apollo-11/"},
+  {"id":"M04","file":"04-untraceable-claim.png","difficulty":"hard","language":"en","claim":"A blue whale was seen in Dhaka city lake on 12 February 2032.","categories":["event","date","place"],"expected_claim":"insufficient_evidence"},
+  {"id":"M05","file":"05-eiffel-tower-berlin-contradicted.png","difficulty":"easy","language":"en","claim":"The Eiffel Tower is in Berlin, Germany.","categories":["place","miscontext"],"expected_claim":"contradicted","reference":"https://www.toureiffel.paris/en/access-map"}
+]

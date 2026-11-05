@@ -11,6 +11,7 @@ export type CachedEvidence = {
   domain: string
   source_type: string
   stance: string | null
+  quote?: string | null
   published_at: string | null
   retrieved_at: string
 }
@@ -28,7 +29,7 @@ export type CachedReport = {
 function read(): CachedReport[] {
   try {
     const value = JSON.parse(localStorage.getItem(KEY) || '[]')
-    return Array.isArray(value) ? value.filter(item => typeof item?.analysis_id === 'string' && typeof item?.saved_at === 'string' && item.verification) : []
+    return Array.isArray(value) ? value.filter(item => typeof item?.analysis_id === 'string' && typeof item?.saved_at === 'string' && item.verification && item.verification.decision_method === 'python_evidence_fusion_v9') : []
   } catch { return [] }
 }
 
@@ -46,6 +47,7 @@ export function saveCachedReport(analysis: AnalysisRead): void {
     evidence: analysis.evidence.slice(0, 30).map(item => ({
       evidence_id: item.evidence_id, title: item.title.slice(0, 300), url: item.url,
       domain: item.domain, source_type: item.source_type, stance: item.stance,
+      quote: analysis.verification?.reasons.some(reason => reason.evidence_id === item.evidence_id) ? item.quote?.slice(0, 320) || null : null,
       published_at: item.published_at, retrieved_at: item.retrieved_at,
     })),
     limitations: analysis.limitations,

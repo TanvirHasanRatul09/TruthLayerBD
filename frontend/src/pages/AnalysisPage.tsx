@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { deleteAnalysis, getAnalysis, imageUrl, matchDataset, retrieveEvidence, runExtraction, saveOcrText, verifyAnalysis, type AnalysisRead } from '../api/truthlayer'
 import GroupedEvidence from '../components/GroupedEvidence'
 import LimitationsBanner from '../components/LimitationsBanner'
-import VerificationSummary from '../components/VerificationSummary'
+import VerificationSummary, { VerificationDetails } from '../components/VerificationSummary'
 import CachedReportView from '../components/CachedReportView'
 import { getCachedReport, type CachedReport } from '../pwa/reportCache'
+import { displayError, useI18n } from '../i18n'
 
-const steps = ['ছবি পড়া', 'দাবি বোঝা', 'সূত্র খোঁজা', 'রিপোর্ট তৈরি']
+const steps = [['ছবি পড়া', 'Read image'], ['দাবি বোঝা', 'Identify claim'], ['সূত্র খোঁজা', 'Search sources'], ['রিপোর্ট তৈরি', 'Create report']] as const
 
 export default function AnalysisPage({ analysisId }: { analysisId: string }) {
+  const { language, tr, date, number } = useI18n()
   const [analysis, setAnalysis] = useState<AnalysisRead | null>(null)
   const [claim, setClaim] = useState('')
   const [loading, setLoading] = useState(true)
@@ -51,7 +53,7 @@ export default function AnalysisPage({ analysisId }: { analysisId: string }) {
       if (checking || !active) return
       if (Date.now() - started > 30000) {
         window.clearInterval(timer)
-        setError('যাচাইয়ের অগ্রগতি পাওয়া যাচ্ছে না। আবার চেষ্টা করুন।')
+        setError(tr('যাচাইয়ের অগ্রগতি পাওয়া যাচ্ছে না। আবার চেষ্টা করুন।', 'Analysis progress is unavailable. Try again.'))
         return
       }
       checking = true
@@ -75,7 +77,7 @@ export default function AnalysisPage({ analysisId }: { analysisId: string }) {
       setUsingCached(true)
       setLoading(false)
     } else {
-      getAnalysis(analysisId).then(value => { if (active) { setAnalysis(value); setCachedReport(null); setUsingCached(false); setClaim(value.extraction?.claim || ''); setCorrection(value.extraction?.claim || value.ocr?.text || '') } }).catch(cause => { if (active) { setCachedReport(getCachedReport(analysisId)); setUsingCached(true); setError(cause instanceof Error ? cause.message : 'বিশ্লেষণ পাওয়া যায়নি।') } }).finally(() => { if (active) setLoading(false) })
+      getAnalysis(analysisId).then(value => { if (active) { setAnalysis(value); setCachedReport(null); setUsingCached(false); setClaim(value.extraction?.claim || ''); setCorrection(value.extraction?.claim || value.ocr?.text || '') } }).catch(cause => { if (active) { setCachedReport(getCachedReport(analysisId)); setUsingCached(true); setError(cause instanceof Error ? cause.message : tr('বিশ্লেষণ পাওয়া যায়নি।', 'Analysis not found.')) } }).finally(() => { if (active) setLoading(false) })
     }
     return () => { active = false }
   }, [analysisId])
@@ -106,7 +108,7 @@ export default function AnalysisPage({ analysisId }: { analysisId: string }) {
     try { const value = await action(); setAnalysis(value); setCachedReport(null); setUsingCached(false); setClaim(value.extraction?.claim || ''); setCorrection(value.extraction?.claim || value.ocr?.text || '') }
     catch (cause) {
       try { const latest = await getAnalysis(analysisId); setAnalysis(latest); setClaim(latest.extraction?.claim || ''); setCorrection(latest.extraction?.claim || latest.ocr?.text || '') } catch { /* Keep the last visible progress if the server is unavailable. */ }
-      setError(cause instanceof Error ? cause.message : 'কাজটি সম্পন্ন হয়নি।')
+      setError(cause instanceof Error ? cause.message : tr('কাজটি সম্পন্ন হয়নি।', 'The action could not be completed.'))
     }
     finally { setBusy(null) }
   }
@@ -129,17 +131,23 @@ export default function AnalysisPage({ analysisId }: { analysisId: string }) {
     await act('claim', () => runExtraction(analysisId, text))
   }
 
+  async function retrySources() {
+    attempted.current.delete('search')
+    attempted.current.delete('verify')
+    await act('search', () => retrieveEvidence(analysisId))
+  }
+
   async function remove() {
     setBusy('delete')
     setError(null)
     try { await deleteAnalysis(analysisId); window.location.hash = '#/history' }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'বিশ্লেষণ মুছতে পারিনি।') }
+    catch (cause) { setError(cause instanceof Error ? cause.message : tr('বিশ্লেষণ মুছতে পারিনি।', 'Could not delete the analysis.')) }
     finally { setBusy(null) }
   }
 
-  if (loading) return <main className="page"><p role="status" className="panel">বিশ্লেষণ আসছে…</p></main>
-  if (cachedReport && usingCached) return <CachedReportView report={cachedReport} onRetry={() => { setBusy('retry'); void refresh().catch(cause => setError(cause instanceof Error ? cause.message : 'রিপোর্ট খোলা যায়নি।')).finally(() => setBusy(null)) }} retrying={busy === 'retry'} />
-  if (!analysis) return <main className="page"><p role="alert" className="alert error">{error || 'বিশ্লেষণ পাওয়া যায়নি।'}</p><a href="#/history">ইতিহাসে ফিরুন</a></main>
+  if (loading) return <main className="page"><p role="status" className="panel">{tr('বিশ্লেষণ আসছে…', 'Loading analysis…')}</p></main>
+  if (cachedReport && usingCached) return <CachedReportView report={cachedReport} onRetry={() => { setBusy('retry'); void refresh().catch(cause => setError(cause instanceof Error ? cause.message : tr('রিপোর্ট খোলা যায়নি।', 'Could not open the report.'))).finally(() => setBusy(null)) }} retrying={busy === 'retry'} />
+  if (!analysis) return <main className="page"><p role="alert" className="alert error">{error ? displayError(error, language) : tr('বিশ্লেষণ পাওয়া যায়নি।', 'Analysis not found.')}</p><a href="#/history">{tr('ইতিহাসে ফিরুন', 'Back to History')}</a></main>
 
   const ocrReady = !!analysis.ocr && !analysis.ocr.needs_confirmation
   const claimReady = !!analysis.extraction?.claim && !analysis.extraction.needs_user_confirmation
@@ -148,28 +156,26 @@ export default function AnalysisPage({ analysisId }: { analysisId: string }) {
   const stage = reportReady ? 4 : analysis.retrieval ? 3 : claimReady ? 2 : ocrReady ? 1 : 0
 
   return <main className="page">
-    <div className="page-heading"><p className="eyebrow">{reportReady ? 'রিপোর্ট প্রস্তুত' : 'যাচাই চলছে'} · {new Date(analysis.created_at).toLocaleString('bn-BD')}</p><h1>{reportReady ? 'যাচাইয়ের রিপোর্ট' : 'ছবিটি যাচাই করা হচ্ছে'}</h1><p className="muted">{reportReady ? 'নিচে সিদ্ধান্ত, সূত্র ও সীমাবদ্ধতা দেখুন।' : 'ছবির লেখা ও পাওয়া সূত্র মিলিয়ে দেখা হচ্ছে। প্রয়োজন হলে আপনার সাহায্য চাওয়া হবে।'}</p></div>
-    {!reportReady && <ol className="progress" aria-label="যাচাইয়ের অগ্রগতি">{steps.map((step, index) => <li key={step} className={index < stage ? 'done' : ''}><span>{index + 1}</span>{step}</li>)}</ol>}
-    {busy && <p className="notice compact" role="status">{busy === 'ocr' ? 'ছবির লেখা পড়া হচ্ছে…' : busy === 'extract' || busy === 'claim' ? 'মূল দাবি বোঝা হচ্ছে…' : busy === 'search' ? 'বিশ্বস্ত সূত্র খোঁজা হচ্ছে…' : 'রিপোর্ট তৈরি হচ্ছে…'}</p>}
-    {analysis.status === 'partial' && reportReady && !busy && <p className="notice compact" role="status">এই রিপোর্ট আংশিক। নিচের সীমাবদ্ধতা দেখুন।</p>}
-    {analysis.status === 'failed' && <p className="alert error" role="alert">বিশ্লেষণ সম্পন্ন হয়নি। আবার চেষ্টা করুন।</p>}
-    {error && <div role="alert" className="alert error"><p>{error}</p><button className="button secondary" onClick={() => { attempted.current.clear(); setAllowResume(true); setError(null) }}>আবার চেষ্টা করুন</button></div>}
+    {reportReady ? <div className="page-heading report-heading"><p className="eyebrow">{tr('রিপোর্ট প্রস্তুত', 'Report ready')} · {date(analysis.created_at)}</p><h1 className="visually-hidden">{tr('যাচাইয়ের রিপোর্ট', 'Analysis report')}</h1></div> : <div className="page-heading"><p className="eyebrow">{tr('যাচাই চলছে', 'Analysis in progress')} · {date(analysis.created_at)}</p><h1>{tr('ছবিটি যাচাই করা হচ্ছে', 'Analyzing your image')}</h1><p className="muted">{tr('ছবির লেখা ও পাওয়া সূত্র মিলিয়ে দেখা হচ্ছে। প্রয়োজন হলে আপনার সাহায্য চাওয়া হবে।', 'We are reading the image and comparing available sources. We will ask if the claim needs clarification.')}</p></div>}
+    {!reportReady && <ol className="progress" aria-label={tr('যাচাইয়ের অগ্রগতি', 'Analysis progress')}>{steps.map(([bn, en], index) => <li key={bn} className={index < stage ? 'done' : index === stage ? 'active' : ''} aria-current={index === stage ? 'step' : undefined}><span>{number(index + 1)}</span>{tr(bn, en)}</li>)}</ol>}
+    {busy && <p className="notice compact" role="status">{busy === 'ocr' ? tr('ছবির লেখা পড়া হচ্ছে…', 'Reading image text…') : busy === 'extract' || busy === 'claim' ? tr('মূল দাবি বোঝা হচ্ছে…', 'Identifying the main claim…') : busy === 'search' ? tr('বিশ্বস্ত সূত্র খোঁজা হচ্ছে…', 'Searching for sources…') : tr('রিপোর্ট তৈরি হচ্ছে…', 'Creating report…')}</p>}
+    {analysis.status === 'failed' && <p className="alert error" role="alert">{tr('বিশ্লেষণ সম্পন্ন হয়নি। আবার চেষ্টা করুন।', 'Analysis did not finish. Try again.')}</p>}
+    {error && <div role="alert" className="alert error"><p>{displayError(error, language)}</p><button className="button secondary" onClick={() => { attempted.current.clear(); setAllowResume(true); setError(null) }}>{tr('আবার চেষ্টা করুন', 'Try again')}</button></div>}
     <div className={reportReady ? 'analysis-grid report-layout' : 'analysis-grid'}>
       <div className="analysis-main">
-        {claimReady && reportReady && <VerificationSummary report={analysis.verification!} />}
-        {claimReady && reportReady && <GroupedEvidence claim={analysis.extraction?.claim || ''} evidence={analysis.evidence} />}
-        <div className={reportReady ? 'report-inputs' : ''}><section className="panel"><p className="eyebrow">আপলোড করা ছবি</p><img className="source-image" src={imageUrl(analysis.image_url)} alt="যাচাইয়ের জন্য আপলোড করা পোস্ট" />{analysis.caption && <p className="muted">ক্যাপশন: {analysis.caption}</p>}</section>
-        {needsCorrection && !reportReady && analysis.status !== 'processing' && <section className="panel correction-panel"><p className="eyebrow">একটি তথ্য নিশ্চিত করুন</p><h2>ছবির মূল দাবিটি কী?</h2><p className="muted">ছবিতে যা লেখা আছে তা দেখে এক বাক্যে মূল দাবিটি লিখুন। এরপর যাচাই নিজে থেকেই চলবে।</p><label className="field-label" htmlFor="correction-text">মূল দাবি</label><textarea id="correction-text" rows={4} maxLength={1000} value={correction} onChange={event => setCorrection(event.target.value)} /><button className="button primary full" disabled={!correction.trim() || !!busy} onClick={submitCorrection}>{busy === 'correction' ? 'সংরক্ষণ হচ্ছে…' : 'দাবি দিয়ে যাচাই চালিয়ে যান'}</button></section>}
-        {reportReady && <section className="panel"><p className="eyebrow">যাচাই করা দাবি</p><p>{analysis.extraction?.claim}</p>{editingClaim ? <><label className="field-label" htmlFor="edit-claim">দাবি ঠিক করুন</label><textarea id="edit-claim" rows={3} maxLength={1000} value={claim} onChange={event => setClaim(event.target.value)} /><div className="button-row"><button className="button primary" disabled={!claim.trim() || !!busy} onClick={rerunClaim}>দাবি ঠিক করে আবার যাচাই করুন</button><button className="button secondary" onClick={() => { setClaim(analysis.extraction?.claim || ''); setEditingClaim(false) }}>বাতিল</button></div></> : <button className="button secondary" onClick={() => setEditingClaim(true)}>দাবি ঠিক করে আবার যাচাই করুন</button>}</section>}
+        {claimReady && reportReady && <><VerificationSummary report={analysis.verification!} evidence={analysis.evidence} claim={analysis.extraction?.claim || ''} retrieval={analysis.retrieval} partial={analysis.status === 'partial'} /><button className="button secondary" disabled={!!busy || !navigator.onLine} onClick={retrySources}>{tr('সূত্র আবার খুঁজে যাচাই করুন', 'Search sources and verify again')}</button></>}
+        {claimReady && reportReady && <details className="panel report-evidence"><summary>{tr('সূত্র ও বিস্তারিত দেখুন', 'View evidence and details')}</summary><div className="report-evidence-content"><VerificationDetails report={analysis.verification!} evidence={analysis.evidence} retrieval={analysis.retrieval} /><GroupedEvidence claim={analysis.extraction?.claim || ''} evidence={analysis.evidence} /><LimitationsBanner limitations={analysis.limitations} fallbacks={analysis.verification?.fallbacks_used} /></div></details>}
+        <div className={reportReady ? 'report-inputs' : ''}><section className="panel"><p className="eyebrow">{tr('আপলোড করা ছবি', 'Uploaded image')}</p><img className="source-image" src={imageUrl(analysis.image_url)} alt={tr('যাচাইয়ের জন্য আপলোড করা পোস্ট', 'Post uploaded for analysis')} />{analysis.caption && <p className="muted">{tr('ক্যাপশন:', 'Caption:')} {analysis.caption}</p>}</section>
+        {needsCorrection && !reportReady && analysis.status !== 'processing' && <section className="panel correction-panel"><p className="eyebrow">{tr('একটি তথ্য নিশ্চিত করুন', 'One quick correction')}</p><h2>{tr('ছবির মূল দাবিটি কী?', 'What is the main claim?')}</h2><p className="muted">{tr('ছবিতে যা লেখা আছে তা দেখে এক বাক্যে মূল দাবিটি লিখুন। এরপর যাচাই নিজে থেকেই চলবে।', 'Read the image and enter its main claim in one sentence. Analysis will then continue automatically.')}</p><label className="field-label" htmlFor="correction-text">{tr('মূল দাবি', 'Main claim')}</label><textarea id="correction-text" rows={4} maxLength={1000} value={correction} onChange={event => setCorrection(event.target.value)} /><button className="button primary full" disabled={!correction.trim() || !!busy} onClick={submitCorrection}>{busy === 'correction' ? tr('সংরক্ষণ হচ্ছে…', 'Saving…') : tr('দাবি দিয়ে যাচাই চালিয়ে যান', 'Continue with this claim')}</button></section>}
+        {reportReady && <section className="panel"><p className="eyebrow">{tr('যাচাই করা দাবি', 'Checked claim')}</p><p>{analysis.extraction?.claim}</p>{editingClaim ? <><label className="field-label" htmlFor="edit-claim">{tr('দাবি ঠিক করুন', 'Edit claim')}</label><textarea id="edit-claim" rows={3} maxLength={1000} value={claim} onChange={event => setClaim(event.target.value)} /><div className="button-row"><button className="button primary" disabled={!claim.trim() || !!busy} onClick={rerunClaim}>{tr('দাবি ঠিক করে আবার যাচাই করুন', 'Edit claim and rerun')}</button><button className="button secondary" onClick={() => { setClaim(analysis.extraction?.claim || ''); setEditingClaim(false) }}>{tr('বাতিল', 'Cancel')}</button></div></> : <button className="button secondary" onClick={() => setEditingClaim(true)}>{tr('দাবি ঠিক করে আবার যাচাই করুন', 'Edit claim and rerun')}</button>}</section>}
         </div>
-        {reportReady && <details className="panel optional-detail"><summary>পুরোনো রেকর্ডের সঙ্গে মিল দেখুন</summary><div id="dataset-title"><p className="muted small">আগের কোনো রেকর্ডের মিল বর্তমান দাবির রায় নয়। একই ছবির নথিবদ্ধ উৎস থাকলে মূল ঘটনার তথ্য দেখানো হয়।</p>
-          <button className="button secondary full" disabled={!!busy} onClick={() => act('match', () => matchDataset(analysisId))}>{busy === 'match' ? 'মিল খোঁজা হচ্ছে…' : 'ডেটাসেটে মিল খুঁজুন'}</button>
-          {analysis.dataset_matches?.length > 0 && <div className="dataset-matches">{analysis.dataset_matches.map(item => <article className="evidence-card" key={`${item.dataset_id}:${item.record_id}`}><h3>{item.match_type === 'exact_image' ? 'একই ছবির ফাইল পাওয়া গেছে' : 'সম্পর্কিত পুরোনো দাবি'}</h3><p className="small muted">{item.dataset_id} · রেকর্ড {item.record_id} · মিল {Math.round(item.similarity * 100).toLocaleString('bn-BD')}%</p>{item.claim_text && <p>{item.claim_text}</p>}{item.original_label && <p>ডেটাসেটের মূল রায়: {item.original_label} (বর্তমান রায় নয়)</p>}<p><a href={item.source_url} target="_blank" rel="noopener noreferrer">মূল রেকর্ড দেখুন</a> · {item.attribution} · {item.license}</p>{item.provenance_url && <div className="notice compact"><strong>নথিবদ্ধ মূল ঘটনা</strong><p>{item.original_event_date && `তারিখ: ${item.original_event_date} · `}{item.original_location && `স্থান: ${item.original_location}`}</p><a href={item.provenance_url} target="_blank" rel="noopener noreferrer">উৎসের প্রমাণ দেখুন</a></div>}</article>)}</div>}
+        {reportReady && <details className="panel optional-detail"><summary>{tr('পুরোনো রেকর্ডের সঙ্গে মিল দেখুন', 'Compare with historical records')}</summary><div id="dataset-title"><p className="muted small">{tr('আগের কোনো রেকর্ডের মিল বর্তমান দাবির রায় নয়। একই ছবির নথিবদ্ধ উৎস থাকলে মূল ঘটনার তথ্য দেখানো হয়।', 'A historical match is not the verdict for this claim. An exact image match may show documented event details.')}</p>
+          <button className="button secondary full" disabled={!!busy} onClick={() => act('match', () => matchDataset(analysisId))}>{busy === 'match' ? tr('মিল খোঁজা হচ্ছে…', 'Searching records…') : tr('ডেটাসেটে মিল খুঁজুন', 'Search historical records')}</button>
+          {analysis.dataset_matches?.length > 0 && <div className="dataset-matches">{analysis.dataset_matches.map(item => <article className="evidence-card" key={`${item.dataset_id}:${item.record_id}`}><h3>{item.match_type === 'exact_image' ? tr('একই ছবির ফাইল পাওয়া গেছে', 'Exact image file found') : tr('সম্পর্কিত পুরোনো দাবি', 'Related historical claim')}</h3><p className="small muted">{item.dataset_id} · {tr('রেকর্ড', 'Record')} {item.record_id} · {tr('মিল', 'Match')} {number(Math.round(item.similarity * 100))}%</p>{item.claim_text && <p>{item.claim_text}</p>}{item.original_label && <p>{tr('ডেটাসেটের মূল রায়:', 'Dataset’s original label:')} {item.original_label} {tr('(বর্তমান রায় নয়)', '(not the current verdict)')}</p>}<p><a href={item.source_url} target="_blank" rel="noopener noreferrer">{tr('মূল রেকর্ড দেখুন', 'View original record')}</a> · {item.attribution} · {item.license}</p>{item.provenance_url && <div className="notice compact"><strong>{tr('নথিবদ্ধ মূল ঘটনা', 'Documented original event')}</strong><p>{item.original_event_date && `${tr('তারিখ:', 'Date:')} ${item.original_event_date} · `}{item.original_location && `${tr('স্থান:', 'Place:')} ${item.original_location}`}</p><a href={item.provenance_url} target="_blank" rel="noopener noreferrer">{tr('উৎসের প্রমাণ দেখুন', 'View provenance source')}</a></div>}</article>)}</div>}
         </div></details>}
-        {reportReady && <LimitationsBanner limitations={analysis.limitations} fallbacks={analysis.verification?.fallbacks_used} />}
-        <div className="button-row bottom-actions"><a className="button secondary" href="#/history">ইতিহাসে ফিরুন</a>{confirmDelete ? <span className="delete-confirm"><span>এই বিশ্লেষণ ও ছবিটি মুছবেন?</span><button className="button danger" disabled={!!busy} onClick={remove}>{busy === 'delete' ? 'মুছছে…' : 'হ্যাঁ, মুছুন'}</button><button className="button secondary" disabled={!!busy} onClick={() => setConfirmDelete(false)}>বাতিল</button></span> : <button className="button danger" disabled={!!busy} onClick={() => setConfirmDelete(true)}>এই বিশ্লেষণ মুছুন</button>}</div>
+        <div className="button-row bottom-actions"><a className="button secondary" href="#/history">{tr('ইতিহাসে ফিরুন', 'Back to History')}</a>{confirmDelete ? <span className="delete-confirm"><span>{tr('এই বিশ্লেষণ ও ছবিটি মুছবেন?', 'Delete this analysis and image?')}</span><button className="button danger" disabled={!!busy} onClick={remove}>{busy === 'delete' ? tr('মুছছে…', 'Deleting…') : tr('হ্যাঁ, মুছুন', 'Yes, delete')}</button><button className="button secondary" disabled={!!busy} onClick={() => setConfirmDelete(false)}>{tr('বাতিল', 'Cancel')}</button></span> : <button className="button danger" disabled={!!busy} onClick={() => setConfirmDelete(true)}>{tr('এই বিশ্লেষণ মুছুন', 'Delete this analysis')}</button>}</div>
       </div>
-      {reportReady && <aside className="sidebar-note"><h2>রিপোর্ট বুঝবেন যেভাবে</h2><p>দাবির সিদ্ধান্ত পাওয়া সূত্রের ওপর নির্ভর করে। উৎস পরিচয়, প্রসঙ্গ ও ছবির সত্যতা আলাদা করে দেখানো হয়। যথেষ্ট প্রমাণ না থাকলে সেগুলো “এখনো নিশ্চিত নয়” থাকবে।</p></aside>}
+      {reportReady && <aside className="sidebar-note"><h2>{tr('রিপোর্ট বুঝবেন যেভাবে', 'How to read this report')}</h2><p>{tr('দাবির সিদ্ধান্ত পাওয়া সূত্রের ওপর নির্ভর করে। উৎস পরিচয়, প্রসঙ্গ ও ছবির সত্যতা আলাদা করে দেখানো হয়। যথেষ্ট প্রমাণ না থাকলে সেগুলো “এখনো নিশ্চিত নয়” থাকবে।', 'The claim conclusion depends on available sources. Source identity, context, and image authenticity are assessed separately. When evidence is lacking, their status remains unknown.')}</p></aside>}
     </div>
   </main>
 }

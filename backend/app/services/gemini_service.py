@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.schemas.providers import ClaimExtraction, ExtractionOutcome, ProviderAttempt
+from app.services.tavily_service import PUBLISHER_DOMAINS
 
 PROMPT = (Path(__file__).resolve().parents[1] / "prompts" / "extract_claim.txt").read_text(encoding="utf-8")
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -72,6 +73,18 @@ def _post(model: str, api_key: str, prompt: str, schema: dict, timeout: int, ope
         return None, ProviderAttempt(operation=operation, success=False, latency_ms=round((time.monotonic() - started) * 1000), error_code="BAD_RESPONSE")
 
 
+def _post_with_retry(model: str, settings: Settings, prompt: str, schema: dict, operation: str) -> tuple[str | None, list[ProviderAttempt]]:
+    """Retry transient provider failures; never retry malformed source evidence."""
+    attempts = []
+    for attempt_number in range(max(0, settings.gemini_max_retries) + 1):
+        output, event = _post(model, settings.gemini_api_key, prompt, schema, settings.gemini_timeout_seconds, operation)
+        attempts.append(event)
+        if output is not None or event.error_code != "SERVER_ERROR" or attempt_number >= settings.gemini_max_retries:
+            break
+        time.sleep(min(0.5 * (attempt_number + 1), 2.0))
+    return output, attempts
+
+
 def _clean_list(values: list[str], limit: int = 8) -> list[str]:
     return [value.strip()[:160] for value in values if isinstance(value, str) and value.strip()][:limit]
 
@@ -80,6 +93,14 @@ def _overlaps(candidate: str, source: str) -> bool:
     tokens = [token for token in re.findall(r"\w+", candidate.casefold()) if len(token) > 1]
     source_tokens = set(re.findall(r"\w+", source.casefold()))
     return any(token in source_tokens for token in tokens)
+
+
+def _visible_publisher(text: str) -> str | None:
+    folded = text.casefold()
+    for name in sorted(PUBLISHER_DOMAINS, key=len, reverse=True):
+        if name in folded:
+            return name
+    return None
 
 
 def validate_extraction(raw: str, source_text: str, max_queries: int) -> ClaimExtraction:
@@ -91,6 +112,8 @@ def validate_extraction(raw: str, source_text: str, max_queries: int) -> ClaimEx
         value.claimed_source = None
         value.ambiguities.append("Claimed source was not present in input.")
         value.needs_user_confirmation = True
+    if not value.claimed_source:
+        value.claimed_source = _visible_publisher(source_text)
     if value.event_date_text and value.event_date_text.casefold() not in source_text.casefold():
         value.event_date_text = None
         value.event_date = None
@@ -116,6 +139,7 @@ def manual_extraction(ocr_text: str, claim_override: str | None = None) -> Claim
     claim = (claim_override or ocr_text).strip()
     return ClaimExtraction(
         claim=claim or None,
+        claimed_source=_visible_publisher(ocr_text),
         search_queries_bn=[claim] if claim else [],
         needs_user_confirmation=claim_override is None,
         ambiguities=["Confirm or edit the main claim before searching."] if claim_override is None else [],
@@ -133,8 +157,9 @@ def extract_claim(ocr_text: str, caption: str | None, settings: Settings, claim_
     for model in dict.fromkeys([settings.gemini_model, settings.gemini_fallback_model]):
         if not model:
             continue
-        access, event = _post(model, settings.gemini_api_key, 'Return {"ok": true}.', ACCESS_SCHEMA, settings.gemini_timeout_seconds, "access_check")
-        attempts.append(event)
+        access, events = _post_with_retry(model, settings, 'Return {"ok": true}.', ACCESS_SCHEMA, "access_check")
+        attempts.extend(events)
+        event = events[-1]
         if access is None:
             continue
         try:
@@ -147,8 +172,9 @@ def extract_claim(ocr_text: str, caption: str | None, settings: Settings, claim_
         prompt = f"{PROMPT}\nOCR TEXT:\n{ocr_text}\nUSER CAPTION:\n{caption or ''}"
         for repair in (False, True):
             current_prompt = prompt if not repair else f"{prompt}\nYour previous output was invalid. Return only valid JSON matching the schema, using only the input text."
-            output, event = _post(model, settings.gemini_api_key, current_prompt, EXTRACTION_SCHEMA, settings.gemini_timeout_seconds, "extract_claim_repair" if repair else "extract_claim")
-            attempts.append(event)
+            output, events = _post_with_retry(model, settings, current_prompt, EXTRACTION_SCHEMA, "extract_claim_repair" if repair else "extract_claim")
+            attempts.extend(events)
+            event = events[-1]
             if output is None:
                 break
             try:

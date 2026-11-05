@@ -32,6 +32,13 @@ class EventDetails(BaseModel):
     reported_by: CitedDetail | None = None
 
 
+class PublisherFinding(BaseModel):
+    status: Literal["confirmed_published", "confirmed_misattributed", "unverified"] = "unverified"
+    claimed_name: str | None = None
+    scope: Literal["claim", "image"] | None = None
+    evidence: CitedDetail | None = None
+
+
 class VerificationRead(BaseModel):
     label: Literal["verified", "supported", "contradicted", "conflicting", "unverified", "insufficient_evidence"]
     flags: list[str] = Field(default_factory=list)
@@ -44,6 +51,8 @@ class VerificationRead(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     layers: dict[str, LayerRead]
     event_details: EventDetails = Field(default_factory=EventDetails)
+    related_event: CitedDetail | None = None
+    publisher: PublisherFinding = Field(default_factory=PublisherFinding)
 
 
 class OcrRead(BaseModel):

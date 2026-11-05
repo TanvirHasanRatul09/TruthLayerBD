@@ -14,3 +14,8 @@ frontend/*.tsbuildinfo
 # Keep README files; exclude other Markdown documents.
 *.md
 !README.md
+!docs/manual-test-cases/CATEGORY_EVALUATION.md
+!docs/manual-test-cases/CATEGORY_TEST_RUN_2026-11-05.md
+!docs/manual-test-cases/EVIDENCE_FIRST_TEST_RUN_2026-11-05.md
+docs/manual-test-cases/category-evaluation-*.json
+docs/manual-test-cases/category-probe.json

@@ -68,7 +68,7 @@ def test_match_endpoint_persists_and_delete_cascades(monkeypatch):
             matched = client.post(f"/api/v1/analyses/{analysis_id}/match")
             assert matched.status_code == 200
             assert matched.json()["dataset_matches"][0]["match_type"] == "exact_image"
-            report = VerificationRead(label="insufficient_evidence", evidence_coverage="low", summary="No evidence", comparison_method="none", decision_method="python_evidence_fusion_v3", layers={key: LayerRead(status="inconclusive", summary="Unknown") for key in ("claim", "source", "context", "media")})
+            report = VerificationRead(label="insufficient_evidence", evidence_coverage="low", summary="No evidence", comparison_method="none", decision_method="python_evidence_fusion_v9", layers={key: LayerRead(status="inconclusive", summary="Unknown") for key in ("claim", "source", "context", "media")})
             with Session(get_engine(settings.database_url)) as session:
                 session.add(VerificationRecord(analysis_id=analysis_id, data_json=report.model_dump_json()))
                 session.commit()
