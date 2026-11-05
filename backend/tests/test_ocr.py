@@ -35,6 +35,14 @@ def test_ocr_model_cache_can_be_kept_off_persistent_data(monkeypatch):
             ocr_service.get_reader.cache_clear()
 
 
+def test_ocr_can_be_disabled_on_memory_limited_host(monkeypatch):
+    monkeypatch.setenv("OCR_ENABLED", "false")
+    monkeypatch.setattr(ocr_service, "get_reader", lambda: pytest.fail("OCR model must not load"))
+    result = ocr_service.extract_text(Path("unused.png"), 0.55)
+    assert result.error_code == "OCR_UNAVAILABLE"
+    assert result.text == ""
+
+
 def box(x: int, y: int):
     return [[x, y], [x + 40, y], [x + 40, y + 12], [x, y + 12]]
 

@@ -73,6 +73,8 @@ def preprocess_image(path: Path):
 
 
 def extract_text(path: Path, min_confidence: float) -> OcrResult:
+    if os.environ.get("OCR_ENABLED", "true").strip().casefold() in {"false", "0", "no"}:
+        return OcrResult(text="", confidence=None, raw_result_json="[]", error_code="OCR_UNAVAILABLE")
     try:
         reader = get_reader()
         first = parse_results(reader.readtext(str(path), detail=1, paragraph=False))
