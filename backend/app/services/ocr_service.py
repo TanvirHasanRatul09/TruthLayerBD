@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ class OcrResult:
 def get_reader():
     import easyocr
 
-    model_dir = Path("data/models")
+    model_dir = Path(os.environ.get("OCR_MODEL_DIR", "data/models"))
     model_dir.mkdir(parents=True, exist_ok=True)
     network_dir = model_dir / "user_network"
     return easyocr.Reader(

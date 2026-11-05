@@ -16,6 +16,25 @@ from app.models.analysis import Analysis, OcrRecord
 from app.services import ocr_service
 
 
+def test_ocr_model_cache_can_be_kept_off_persistent_data(monkeypatch):
+    class FakeEasyOcr:
+        @staticmethod
+        def Reader(_languages, **options):
+            return options
+
+    with TemporaryDirectory(dir=".") as folder:
+        model_dir = Path(folder) / "ocr-cache"
+        monkeypatch.setenv("OCR_MODEL_DIR", str(model_dir))
+        monkeypatch.setitem(__import__("sys").modules, "easyocr", FakeEasyOcr)
+        ocr_service.get_reader.cache_clear()
+        try:
+            options = ocr_service.get_reader()
+            assert Path(options["model_storage_directory"]) == model_dir.resolve()
+            assert Path(options["user_network_directory"]).parent == model_dir.resolve()
+        finally:
+            ocr_service.get_reader.cache_clear()
+
+
 def box(x: int, y: int):
     return [[x, y], [x + 40, y], [x + 40, y + 12], [x, y + 12]]
 

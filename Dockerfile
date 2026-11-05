@@ -7,7 +7,7 @@ ENV VITE_API_BASE_URL=/api/v1
 RUN npm run build
 
 FROM python:3.11-slim-bookworm
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 OCR_MODEL_DIR=/tmp/truthlayer-ocr-models
 RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/backend
 COPY backend/requirements.txt ./
